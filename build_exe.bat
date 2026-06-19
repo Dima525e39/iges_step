@@ -2,7 +2,7 @@
 setlocal
 
 set APP_NAME=TubeCutCalculator
-set APP_VERSION=v0.2.2
+set APP_VERSION=v0.2.3
 set ENV_NAME=TubeCutCalculator
 
 echo Building %APP_NAME% %APP_VERSION%
@@ -32,7 +32,7 @@ if errorlevel 1 (
     if errorlevel 1 exit /b 1
 )
 
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$date=(Get-Date).ToString('yyyy-MM-dd HH:mm:ss'); Set-Content -Encoding UTF8 version.txt @('TubeCutCalculator v0.2.2','Build date: ' + $date,'Description: STEP/IGES import, 3D viewer, drag-and-drop, file queue. Hotfix: topology summary import fix, clearer import errors, and safer non-ASCII file paths. Geometry analysis is not implemented.')"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$date=(Get-Date).ToString('yyyy-MM-dd HH:mm:ss'); Set-Content -Encoding UTF8 version.txt @('TubeCutCalculator v0.2.3','Build date: ' + $date,'Description: STEP/IGES import, 3D viewer, drag-and-drop, file queue. Hotfix: cursor-centered 3D zoom and disabled click selection highlight. Geometry analysis is not implemented.')"
 if errorlevel 1 exit /b 1
 
 call %CONDA_CMD% run -n %ENV_NAME% python -m PyInstaller --noconfirm --clean TubeCutCalculator.spec
