@@ -24,18 +24,18 @@ if errorlevel 1 (
 conda env list | findstr /R /C:"^%ENV_NAME% " >nul
 if errorlevel 1 (
     echo Creating conda environment %ENV_NAME%...
-    %CONDA_CMD% env create -f environment.yml
+    call %CONDA_CMD% env create -f environment.yml
     if errorlevel 1 exit /b 1
 ) else (
     echo Updating conda environment %ENV_NAME%...
-    %CONDA_CMD% env update -n %ENV_NAME% -f environment.yml --prune
+    call %CONDA_CMD% env update -n %ENV_NAME% -f environment.yml --prune
     if errorlevel 1 exit /b 1
 )
 
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$date=(Get-Date).ToString('yyyy-MM-dd HH:mm:ss'); Set-Content -Encoding UTF8 version.txt @('TubeCutCalculator v0.2.0','Build date: ' + $date,'Description: STEP/IGES import, 3D viewer, drag-and-drop, file queue. Geometry analysis is not implemented.')"
 if errorlevel 1 exit /b 1
 
-conda run -n %ENV_NAME% python -m PyInstaller --noconfirm --clean TubeCutCalculator.spec
+call %CONDA_CMD% run -n %ENV_NAME% python -m PyInstaller --noconfirm --clean TubeCutCalculator.spec
 if errorlevel 1 exit /b 1
 
 if not exist dist (
