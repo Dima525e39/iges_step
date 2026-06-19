@@ -14,6 +14,11 @@ datas = [
 ]
 binaries = []
 hiddenimports = [
+    "PySide6.QtCore",
+    "PySide6.QtGui",
+    "PySide6.QtOpenGL",
+    "PySide6.QtOpenGLWidgets",
+    "PySide6.QtWidgets",
     "OCC.Core.Bnd",
     "OCC.Core.BRepBndLib",
     "OCC.Core.IFSelect",
@@ -26,7 +31,7 @@ hiddenimports = [
     "OCC.Display.qtDisplay",
 ]
 
-for package_name in ("PySide6", "OCC"):
+for package_name in ("OCC",):
     package_datas, package_binaries, package_hiddenimports = collect_all(package_name)
     datas += package_datas
     binaries += package_binaries
