@@ -64,7 +64,7 @@ build_exe.bat
 
 ## GitHub Releases
 
-В проекте есть workflow `.github/workflows/build-windows.yml`. При создании тега вида `v0.1.0` workflow собирает EXE на Windows runner, загружает артефакт и прикладывает его к GitHub Release.
+В проекте есть workflow `.github/workflows/build-windows.yml`. При push в `main` workflow собирает EXE на Windows runner и загружает артефакт. При создании тега вида `v0.1.0` workflow также прикладывает EXE к GitHub Release.
 
 ```bat
 git tag v0.1.0
