@@ -68,6 +68,30 @@ class CadImporterTests(unittest.TestCase):
             with self.assertRaises(CadImportError):
                 CadImporter().import_file(unsupported)
 
+    def test_non_ascii_path_is_copied_to_ascii_temp_path_for_opencascade(self) -> None:
+        from pathlib import Path
+        from tempfile import TemporaryDirectory
+
+        with TemporaryDirectory() as temp_dir:
+            source = Path(temp_dir) / "деталь.step"
+            source.write_text("STEP DATA", encoding="utf-8")
+
+            with CadImporter._path_for_opencascade(source) as read_path:
+                self.assertTrue(str(read_path).isascii())
+                self.assertEqual(read_path.suffix, ".step")
+                self.assertEqual(read_path.read_text(encoding="utf-8"), "STEP DATA")
+
+    def test_ascii_path_is_used_directly_for_opencascade(self) -> None:
+        from pathlib import Path
+        from tempfile import TemporaryDirectory
+
+        with TemporaryDirectory() as temp_dir:
+            source = Path(temp_dir) / "part.step"
+            source.write_text("STEP DATA", encoding="utf-8")
+
+            with CadImporter._path_for_opencascade(source) as read_path:
+                self.assertEqual(read_path, source)
+
 
 if __name__ == "__main__":
     unittest.main()

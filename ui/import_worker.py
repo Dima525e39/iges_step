@@ -25,7 +25,8 @@ class CadImportWorker(QObject):
                 result = importer.import_file(path)
                 summary = summarize_shape(result.shape)
             except Exception as exc:
-                self.failed.emit(path, str(exc))
+                message = str(exc).strip() or exc.__class__.__name__
+                self.failed.emit(path, message)
                 continue
             self.progress.emit(path, result, summary)
         self.finished.emit()

@@ -417,7 +417,8 @@ class MainWindow(QMainWindow):
         job.status = STATUS_ERROR
         job.error_text = error_message
         job.warnings = [
-            "Импорт не выполнен. Проверьте файл и окружение pythonocc-core.",
+            "Импорт не выполнен.",
+            f"Причина: {error_message}",
         ]
         self.imported_shapes.pop(job.normalized_path, None)
         self.shape_summaries.pop(job.normalized_path, None)

@@ -1,14 +1,19 @@
 from __future__ import annotations
 
 import sys
-
-from PySide6.QtWidgets import QApplication
+from pathlib import Path
 
 from app_info import APP_NAME, APP_VERSION
-from ui.main_window import MainWindow
 
 
 def main() -> int:
+    if "--self-test-imports" in sys.argv:
+        output_path = _self_test_output_path(sys.argv)
+        return _run_import_self_test(output_path)
+
+    from PySide6.QtWidgets import QApplication
+    from ui.main_window import MainWindow
+
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
     app.setApplicationVersion(APP_VERSION)
@@ -16,6 +21,70 @@ def main() -> int:
     window = MainWindow()
     window.show()
     return app.exec()
+
+
+def _self_test_output_path(args: list[str]) -> Path | None:
+    for index, arg in enumerate(args):
+        if arg == "--self-test-output" and index + 1 < len(args):
+            return Path(args[index + 1])
+        if arg.startswith("--self-test-output="):
+            return Path(arg.split("=", 1)[1])
+    return None
+
+
+def _run_import_self_test(output_path: Path | None) -> int:
+    lines: list[str] = []
+
+    def record(message: str) -> None:
+        lines.append(message)
+
+    exit_code = 0
+    try:
+        record(f"{APP_NAME} {APP_VERSION} import self-test")
+        from PySide6.QtCore import qVersion
+
+        record(f"PySide6 Qt {qVersion()}: OK")
+
+        from OCC.Core.Bnd import Bnd_Box
+        from OCC.Core.IFSelect import IFSelect_RetDone
+        from OCC.Core.IGESControl import IGESControl_Reader
+        from OCC.Core.Interface import Interface_Static
+        from OCC.Core.STEPControl import STEPControl_Reader
+        from OCC.Core.TopAbs import TopAbs_EDGE, TopAbs_FACE
+        from OCC.Core.TopExp import TopExp_Explorer
+
+        try:
+            from OCC.Core.BRepBndLib import brepbndlib
+
+            bbox_add = brepbndlib.Add
+        except ImportError:
+            from OCC.Core.BRepBndLib import brepbndlib_Add
+
+            bbox_add = brepbndlib_Add
+
+        _ = (
+            Bnd_Box,
+            bbox_add,
+            IFSelect_RetDone,
+            IGESControl_Reader,
+            Interface_Static,
+            STEPControl_Reader,
+            TopAbs_EDGE,
+            TopAbs_FACE,
+            TopExp_Explorer,
+        )
+        record("pythonocc-core import modules: OK")
+    except Exception as exc:
+        exit_code = 1
+        record(f"FAILED: {exc.__class__.__name__}: {exc}")
+
+    text = "\n".join(lines) + "\n"
+    if output_path is not None:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(text, encoding="utf-8")
+    else:
+        sys.stdout.write(text)
+    return exit_code
 
 
 if __name__ == "__main__":
