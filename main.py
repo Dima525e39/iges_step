@@ -52,6 +52,7 @@ def _run_import_self_test(output_path: Path | None) -> int:
         from OCC.Core.STEPControl import STEPControl_Reader
         from OCC.Core.TopAbs import TopAbs_EDGE, TopAbs_FACE
         from OCC.Core.TopExp import TopExp_Explorer
+        from OCC.Core.TopoDS import TopoDS_Shape
 
         try:
             from OCC.Core.BRepBndLib import brepbndlib
@@ -72,8 +73,14 @@ def _run_import_self_test(output_path: Path | None) -> int:
             TopAbs_EDGE,
             TopAbs_FACE,
             TopExp_Explorer,
+            TopoDS_Shape,
         )
         record("pythonocc-core import modules: OK")
+
+        from cad.shape_summary import _count_topology
+
+        _count_topology(TopoDS_Shape(), TopAbs_FACE)
+        record("shape summary topology helper: OK")
     except Exception as exc:
         exit_code = 1
         record(f"FAILED: {exc.__class__.__name__}: {exc}")

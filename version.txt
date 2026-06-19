@@ -1,3 +1,3 @@
-TubeCutCalculator v0.2.1
+TubeCutCalculator v0.2.2
 Build date: 2026-06-19
-Description: STEP/IGES import, 3D viewer, drag-and-drop, file queue. Hotfix: clearer import errors and safer non-ASCII file paths. Geometry analysis is not implemented.
+Description: STEP/IGES import, 3D viewer, drag-and-drop, file queue. Hotfix: topology summary import fix, clearer import errors, and safer non-ASCII file paths. Geometry analysis is not implemented.

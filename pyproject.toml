@@ -1,6 +1,6 @@
 [project]
 name = "tube-cut-calculator"
-version = "0.2.1"
+version = "0.2.2"
 description = "Windows GUI for laser tube cutting workflow with STEP/IGES import and 3D preview."
 requires-python = ">=3.13"
 dependencies = [

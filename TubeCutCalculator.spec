@@ -27,6 +27,7 @@ hiddenimports = [
     "OCC.Core.STEPControl",
     "OCC.Core.TopAbs",
     "OCC.Core.TopExp",
+    "OCC.Core.TopoDS",
     "OCC.Display.backend",
     "OCC.Display.qtDisplay",
 ]

@@ -37,6 +37,8 @@ def summarize_shape(shape: object) -> ShapeSummary:
 
 
 def _count_topology(shape: object, shape_type: int) -> int:
+    from OCC.Core.TopExp import TopExp_Explorer
+
     explorer = TopExp_Explorer(shape, shape_type)
     count = 0
     while explorer.More():

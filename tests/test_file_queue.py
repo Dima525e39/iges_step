@@ -1,10 +1,23 @@
 from __future__ import annotations
 
+import sys
+import types
 import unittest
 
 from cad.importer import CadImportError, CadImporter
 from cad.supported_formats import collect_supported_files, is_supported_cad_file
 from core.file_queue import FileQueue
+
+
+class FakeTopExpExplorer:
+    def __init__(self, shape: object, shape_type: int) -> None:
+        self.remaining = 2
+
+    def More(self) -> bool:
+        return self.remaining > 0
+
+    def Next(self) -> None:
+        self.remaining -= 1
 
 
 class SupportedFormatTests(unittest.TestCase):
@@ -91,6 +104,30 @@ class CadImporterTests(unittest.TestCase):
 
             with CadImporter._path_for_opencascade(source) as read_path:
                 self.assertEqual(read_path, source)
+
+    def test_count_topology_imports_top_exp_explorer_in_helper_scope(self) -> None:
+        from cad.shape_summary import _count_topology
+
+        module_names = ["OCC", "OCC.Core", "OCC.Core.TopExp"]
+        originals = {name: sys.modules.get(name) for name in module_names}
+
+        occ_module = types.ModuleType("OCC")
+        core_module = types.ModuleType("OCC.Core")
+        top_exp_module = types.ModuleType("OCC.Core.TopExp")
+        top_exp_module.TopExp_Explorer = FakeTopExpExplorer
+
+        try:
+            sys.modules["OCC"] = occ_module
+            sys.modules["OCC.Core"] = core_module
+            sys.modules["OCC.Core.TopExp"] = top_exp_module
+
+            self.assertEqual(_count_topology(object(), 1), 2)
+        finally:
+            for name, original in originals.items():
+                if original is None:
+                    sys.modules.pop(name, None)
+                else:
+                    sys.modules[name] = original
 
 
 if __name__ == "__main__":
