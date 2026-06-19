@@ -28,13 +28,19 @@ jobs:
         shell: cmd
         run: build_exe.bat
 
+      - name: Verify build output
+        shell: cmd
+        run: |
+          dir /S dist
+          if not exist dist\TubeCutCalculator.exe exit /b 1
+          if not exist dist\version.txt exit /b 1
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: TubeCutCalculator-windows-${{ github.run_number }}
-          path: |
-            dist/TubeCutCalculator.exe
-            dist/version.txt
+          if-no-files-found: error
+          path: dist/**
 
       - name: Attach to GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
