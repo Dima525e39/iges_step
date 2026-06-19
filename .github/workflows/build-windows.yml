@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - main
+      - "feature/**"
     tags:
       - "v*"
 
@@ -16,10 +17,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Set up Miniforge
+        uses: conda-incubator/setup-miniconda@v3
         with:
-          python-version: "3.13"
+          miniforge-version: latest
+          auto-activate-base: false
+          use-mamba: true
 
       - name: Build EXE
         shell: cmd
@@ -28,7 +31,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: TubeCutCalculator-${{ github.ref_name }}-windows
+          name: TubeCutCalculator-windows-${{ github.run_number }}
           path: |
             dist/TubeCutCalculator.exe
             dist/version.txt

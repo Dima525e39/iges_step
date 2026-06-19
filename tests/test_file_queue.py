@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 
+from cad.importer import CadImportError, CadImporter
 from cad.supported_formats import collect_supported_files, is_supported_cad_file
 from core.file_queue import FileQueue
 
@@ -46,6 +47,26 @@ class FileQueueTests(unittest.TestCase):
         self.assertEqual(len(first.added), 1)
         self.assertEqual(len(second.added), 0)
         self.assertEqual(len(second.duplicates), 1)
+
+
+class CadImporterTests(unittest.TestCase):
+    def test_detect_format_uses_supported_extensions(self) -> None:
+        self.assertEqual(CadImporter.detect_format("tube.step"), "STEP")
+        self.assertEqual(CadImporter.detect_format("tube.STP"), "STEP")
+        self.assertEqual(CadImporter.detect_format("tube.iges"), "IGES")
+        self.assertEqual(CadImporter.detect_format("tube.IGS"), "IGES")
+        self.assertEqual(CadImporter.detect_format("tube.txt"), "UNKNOWN")
+
+    def test_unsupported_import_raises_before_occ_dependency_is_needed(self) -> None:
+        from pathlib import Path
+        from tempfile import TemporaryDirectory
+
+        with TemporaryDirectory() as temp_dir:
+            unsupported = Path(temp_dir) / "tube.txt"
+            unsupported.write_text("", encoding="utf-8")
+
+            with self.assertRaises(CadImportError):
+                CadImporter().import_file(unsupported)
 
 
 if __name__ == "__main__":

@@ -8,6 +8,8 @@ from typing import Any
 PLACEHOLDER = "—"
 STATUS_PENDING = "Ожидает"
 STATUS_DONE = "Обработан"
+STATUS_IMPORTED = "Импортирован"
+STATUS_IMPORTING = "Импорт..."
 STATUS_ERROR = "Ошибка импорта"
 
 

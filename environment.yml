@@ -1,0 +1,9 @@
+name: TubeCutCalculator
+channels:
+  - conda-forge
+dependencies:
+  - python=3.13
+  - pyside6>=6.9
+  - pythonocc-core=7.9.3
+  - pyinstaller>=6.14
+  - pip

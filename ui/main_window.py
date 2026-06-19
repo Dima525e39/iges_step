@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QThread, Qt
 from PySide6.QtGui import QDragEnterEvent, QDragLeaveEvent, QDragMoveEvent, QDropEvent
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -26,13 +26,22 @@ from PySide6.QtWidgets import (
 )
 
 from app_info import APP_DESCRIPTION, APP_NAME, APP_VERSION
-from core.file_job import FileJob, STATUS_PENDING
+from cad.shape_summary import ShapeSummary
+from core.file_job import (
+    PLACEHOLDER,
+    FileJob,
+    STATUS_ERROR,
+    STATUS_IMPORTED,
+    STATUS_IMPORTING,
+    STATUS_PENDING,
+)
 from core.file_queue import AddFilesResult, FileQueue
 from export.json_project import save_project
 from settings.settings_manager import SettingsManager
 from ui.drop_helpers import local_paths_from_mime_data
 from ui.file_drop_area import FileDropArea
 from ui.file_list_widget import FileListWidget
+from ui.import_worker import CadImportWorker
 from ui.viewer_2d import Viewer2D
 from ui.viewer_3d import Viewer3D
 
@@ -42,6 +51,10 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.queue = FileQueue()
         self.settings_manager = SettingsManager()
+        self.imported_shapes: dict[str, object] = {}
+        self.shape_summaries: dict[str, ShapeSummary] = {}
+        self.import_thread: QThread | None = None
+        self.import_worker: CadImportWorker | None = None
 
         self.setAcceptDrops(True)
         self.setWindowTitle(f"{APP_NAME} {APP_VERSION}")
@@ -217,8 +230,8 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(panel)
 
         actions = QHBoxLayout()
-        self.process_selected_button = QPushButton("Обработать выбранный")
-        self.process_all_button = QPushButton("Обработать все")
+        self.process_selected_button = QPushButton("Импортировать выбранный")
+        self.process_all_button = QPushButton("Импортировать все")
         self.export_csv_button = QPushButton("Экспорт CSV")
         self.export_pdf_button = QPushButton("Экспорт PDF")
         self.save_project_button = QPushButton("Сохранить проект")
@@ -286,6 +299,8 @@ class MainWindow(QMainWindow):
         if len(self.queue) == 0:
             return
         self.queue.clear()
+        self.imported_shapes.clear()
+        self.shape_summaries.clear()
         self._refresh_jobs()
 
     def _remove_selected_jobs(self) -> None:
@@ -293,26 +308,26 @@ class MainWindow(QMainWindow):
         if not paths and self.compact_list.currentItem() is not None:
             paths = [self.compact_list.currentItem().data(Qt.ItemDataRole.UserRole)]
         self.queue.remove_paths(paths)
+        for path in paths:
+            key = str(path)
+            self.imported_shapes.pop(key, None)
+            self.shape_summaries.pop(key, None)
         self._refresh_jobs()
 
     def _process_selected(self) -> None:
         selected_paths = self.file_table.selected_paths()
+        if not selected_paths and self.compact_list.currentItem() is not None:
+            selected_paths = [self.compact_list.currentItem().data(Qt.ItemDataRole.UserRole)]
         if not selected_paths:
-            QMessageBox.information(self, "Обработка", "Выберите файл в списке.")
+            QMessageBox.information(self, "Импорт", "Выберите файл в списке.")
             return
-        self._show_geometry_stub_message()
+        self._start_import(selected_paths)
 
     def _process_all(self) -> None:
         if len(self.queue) == 0:
-            QMessageBox.information(self, "Обработка", "Список файлов пуст.")
+            QMessageBox.information(self, "Импорт", "Список файлов пуст.")
             return
-        for job in self.queue.jobs():
-            job.status = STATUS_PENDING
-            message = "Геометрический анализ не входит в v0.1.0."
-            if message not in job.warnings:
-                job.warnings.append(message)
-        self._refresh_jobs()
-        self._show_geometry_stub_message()
+        self._start_import([job.normalized_path for job in self.queue.jobs()])
 
     def _save_project(self) -> None:
         target_path, _ = QFileDialog.getSaveFileName(
@@ -326,12 +341,123 @@ class MainWindow(QMainWindow):
         save_project(self.queue.jobs(), target_path)
         self.statusBar().showMessage(f"Проект сохранен: {Path(target_path).name}", 5000)
 
-    def _show_geometry_stub_message(self) -> None:
-        QMessageBox.information(
-            self,
-            f"{APP_NAME} {APP_VERSION}",
-            "В v0.1.0 реализованы интерфейс, drag-and-drop и очередь файлов.\n"
-            "CAD-импорт, 3D-просмотр и геометрический расчет начнутся со следующих версий.",
+    def _start_import(self, paths: list[str]) -> None:
+        if self.import_thread is not None:
+            QMessageBox.information(self, "Импорт", "Импорт уже выполняется.")
+            return
+
+        jobs = [self.queue.get(path) for path in paths]
+        import_jobs = [job for job in jobs if job is not None]
+        if not import_jobs:
+            return
+
+        for job in import_jobs:
+            job.status = STATUS_IMPORTING
+            job.tube_type = PLACEHOLDER
+            job.tube_length_mm = PLACEHOLDER
+            job.wall_thickness_mm = PLACEHOLDER
+            job.cut_length_mm = PLACEHOLDER
+            job.pierce_count = PLACEHOLDER
+            job.price = PLACEHOLDER
+            job.error_text = ""
+            job.warnings.clear()
+            self.imported_shapes.pop(job.normalized_path, None)
+            self.shape_summaries.pop(job.normalized_path, None)
+
+        self._set_import_controls_enabled(False)
+        self.statusBar().showMessage(f"Импорт файлов: {len(import_jobs)}")
+        self._refresh_jobs()
+
+        self.import_thread = QThread(self)
+        self.import_worker = CadImportWorker([Path(job.normalized_path) for job in import_jobs])
+        self.import_worker.moveToThread(self.import_thread)
+        self.import_thread.started.connect(self.import_worker.run)
+        self.import_worker.progress.connect(self._on_import_progress)
+        self.import_worker.failed.connect(self._on_import_failed)
+        self.import_worker.finished.connect(self.import_thread.quit)
+        self.import_worker.finished.connect(self.import_worker.deleteLater)
+        self.import_thread.finished.connect(self._finish_import_thread)
+        self.import_thread.finished.connect(self.import_thread.deleteLater)
+        self.import_thread.start()
+
+    def _on_import_progress(self, path: str, result: object, summary: object) -> None:
+        job = self.queue.get(path)
+        if job is None:
+            return
+
+        shape = getattr(result, "shape")
+        file_format = getattr(result, "file_format", "CAD")
+        shape_summary = summary
+        self.imported_shapes[job.normalized_path] = shape
+        self.shape_summaries[job.normalized_path] = shape_summary
+
+        job.status = STATUS_IMPORTED
+        job.tube_type = str(file_format)
+        job.tube_length_mm = self._format_model_length(shape_summary)
+        job.wall_thickness_mm = PLACEHOLDER
+        job.cut_length_mm = PLACEHOLDER
+        job.pierce_count = PLACEHOLDER
+        job.price = PLACEHOLDER
+        job.error_text = ""
+        job.warnings = [
+            self._format_shape_summary(shape_summary),
+            "Расчет длины реза и количества врезок будет добавлен после этапа анализа геометрии.",
+        ]
+
+        self._refresh_jobs()
+        current_job = self._current_job()
+        if current_job is not None and current_job.normalized_path == job.normalized_path:
+            self.viewer_3d.show_shape(shape, job.name)
+
+    def _on_import_failed(self, path: str, error_message: str) -> None:
+        job = self.queue.get(path)
+        if job is None:
+            return
+
+        job.status = STATUS_ERROR
+        job.error_text = error_message
+        job.warnings = [
+            "Импорт не выполнен. Проверьте файл и окружение pythonocc-core.",
+        ]
+        self.imported_shapes.pop(job.normalized_path, None)
+        self.shape_summaries.pop(job.normalized_path, None)
+        self._refresh_jobs()
+
+    def _finish_import_thread(self) -> None:
+        self.import_thread = None
+        self.import_worker = None
+        self._set_import_controls_enabled(True)
+        imported = sum(1 for job in self.queue.jobs() if job.status == STATUS_IMPORTED)
+        failed = sum(1 for job in self.queue.jobs() if job.status == STATUS_ERROR)
+        self.statusBar().showMessage(
+            f"Импорт завершен. Успешно: {imported}; ошибок: {failed}",
+            7000,
+        )
+
+    def _set_import_controls_enabled(self, enabled: bool) -> None:
+        self.process_selected_button.setEnabled(enabled)
+        self.process_all_button.setEnabled(enabled)
+        self.add_file_button.setEnabled(enabled)
+        self.add_folder_button.setEnabled(enabled)
+        self.clear_button.setEnabled(enabled)
+        self.remove_button.setEnabled(enabled)
+
+    def _format_model_length(self, summary: object) -> str:
+        sizes = [
+            getattr(summary, "size_x_mm", 0.0),
+            getattr(summary, "size_y_mm", 0.0),
+            getattr(summary, "size_z_mm", 0.0),
+        ]
+        return f"{max(sizes):.1f} мм"
+
+    def _format_shape_summary(self, summary: object) -> str:
+        return (
+            "Импорт выполнен. "
+            f"Габариты: {getattr(summary, 'size_x_mm', 0.0):.1f} x "
+            f"{getattr(summary, 'size_y_mm', 0.0):.1f} x "
+            f"{getattr(summary, 'size_z_mm', 0.0):.1f} мм; "
+            f"граней: {getattr(summary, 'face_count', 0)}, "
+            f"ребер: {getattr(summary, 'edge_count', 0)}."
         )
 
     def _refresh_jobs(self) -> None:
@@ -392,7 +518,11 @@ class MainWindow(QMainWindow):
         return self.queue.get(current_item.data(Qt.ItemDataRole.UserRole))
 
     def _show_selected_job(self, job: FileJob | None) -> None:
-        self.viewer_3d.show_job(job)
+        shape = self.imported_shapes.get(job.normalized_path) if job is not None else None
+        if shape is None:
+            self.viewer_3d.show_job(job)
+        else:
+            self.viewer_3d.show_shape(shape, job.name)
         self.viewer_2d.show_job(job)
 
         if job is None:

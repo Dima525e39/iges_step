@@ -1,2 +1,4 @@
 PySide6>=6.9,<7
 pyinstaller>=6.14,<7
+
+# pythonocc-core is installed from conda-forge via environment.yml.
