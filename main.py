@@ -47,6 +47,7 @@ def _run_import_self_test(output_path: Path | None) -> int:
 
         from OCC.Core.Bnd import Bnd_Box
         from OCC.Core.BRepAdaptor import BRepAdaptor_Surface
+        import OCC.Core.BRepGProp as brep_gprop
         from OCC.Core.IFSelect import IFSelect_RetDone
         from OCC.Core.GProp import GProp_GProps
         from OCC.Core.IGESControl import IGESControl_Reader
@@ -69,6 +70,7 @@ def _run_import_self_test(output_path: Path | None) -> int:
         _ = (
             Bnd_Box,
             bbox_add,
+            brep_gprop,
             IFSelect_RetDone,
             IGESControl_Reader,
             Interface_Static,
@@ -86,6 +88,7 @@ def _run_import_self_test(output_path: Path | None) -> int:
         record("pythonocc-core import modules: OK")
 
         from cad.analyzer import analyze_shape
+        from cad.profile_detector import detect_profile_from_dimensions
         from cad.shape_summary import _count_topology
 
         _count_topology(TopoDS_Shape(), TopAbs_FACE)
@@ -107,6 +110,9 @@ def _run_import_self_test(output_path: Path | None) -> int:
             file_format="SELFTEST",
         )
         record("geometry analyzer helper: OK")
+
+        detect_profile_from_dimensions(100.0, 20.0, 10.0)
+        record("profile detector helper: OK")
     except Exception as exc:
         exit_code = 1
         record(f"FAILED: {exc.__class__.__name__}: {exc}")

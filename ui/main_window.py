@@ -38,6 +38,7 @@ from core.file_job import (
 )
 from core.file_queue import AddFilesResult, FileQueue
 from export.json_project import save_project
+from pricing.calculator import PricingInput, calculate_price
 from settings.settings_manager import SettingsManager
 from ui.drop_helpers import local_paths_from_mime_data
 from ui.file_drop_area import FileDropArea
@@ -424,13 +425,13 @@ class MainWindow(QMainWindow):
         job.tube_type = getattr(geometry_analysis, "profile_hint", str(file_format))
         job.tube_length_mm = self._format_analysis_length(geometry_analysis)
         job.wall_thickness_mm = PLACEHOLDER
-        job.cut_length_mm = PLACEHOLDER
-        job.pierce_count = PLACEHOLDER
-        job.price = PLACEHOLDER
+        job.cut_length_mm = self._format_cut_length(geometry_analysis)
+        job.pierce_count = self._format_pierce_count(geometry_analysis)
+        job.price = self._format_price(geometry_analysis)
         job.error_text = ""
         job.warnings = [
             self._format_analysis_summary(geometry_analysis),
-            "Расчет длины реза и количества врезок будет добавлен после этапа анализа геометрии.",
+            "Длина реза и врезки рассчитаны предварительно; проверяйте спорные модели через DEV-скрипт.",
         ]
         analysis_warnings = getattr(geometry_analysis, "warnings", ())
         job.warnings.extend(str(warning) for warning in analysis_warnings)
@@ -499,8 +500,42 @@ class MainWindow(QMainWindow):
             f"solid: {getattr(analysis, 'solid_count', 0)}, "
             f"shell: {getattr(analysis, 'shell_count', 0)}, "
             f"граней: {getattr(analysis, 'face_count', 0)}, "
-            f"ребер: {getattr(analysis, 'edge_count', 0)}."
+            f"ребер: {getattr(analysis, 'edge_count', 0)}; "
+            f"ребер реза: {getattr(analysis, 'cut_edge_count', 0)}, "
+            f"длина реза: {getattr(analysis, 'cut_length_mm', 0.0):.1f} мм, "
+            f"врезок: {getattr(analysis, 'pierce_count', 0)}."
         )
+
+    def _format_cut_length(self, analysis: object) -> str:
+        cut_length = float(getattr(analysis, "cut_length_mm", 0.0))
+        if cut_length <= 0.0:
+            return PLACEHOLDER
+        return f"{cut_length:.1f} мм"
+
+    def _format_pierce_count(self, analysis: object) -> str:
+        pierce_count = int(getattr(analysis, "pierce_count", 0))
+        if pierce_count <= 0:
+            return PLACEHOLDER
+        return str(pierce_count)
+
+    def _format_price(self, analysis: object) -> str:
+        cut_length = float(getattr(analysis, "cut_length_mm", 0.0))
+        pierce_count = int(getattr(analysis, "pierce_count", 0))
+        if cut_length <= 0.0 and pierce_count <= 0:
+            return PLACEHOLDER
+        price = calculate_price(
+            PricingInput(
+                cut_length_mm=cut_length,
+                pierce_count=pierce_count,
+                price_per_meter=self.price_per_meter_input.value(),
+                price_per_pierce=self.price_per_pierce_input.value(),
+                setup_price=self.setup_price_input.value(),
+                minimum_price=self.minimum_price_input.value(),
+                complexity_factor=self.complexity_factor_input.value(),
+                markup_percent=self.markup_percent_input.value(),
+            )
+        )
+        return f"{price:.2f}"
 
     def _format_shape_summary(self, summary: object) -> str:
         return (

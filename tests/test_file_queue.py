@@ -6,6 +6,8 @@ import unittest
 
 from cad.analyzer import GeometryAnalysisResult, analyze_shape
 from cad.importer import CadImportError, CadImporter
+from cad.pierce_counter import _count_components_from_pairs
+from cad.profile_detector import detect_profile_from_dimensions
 from cad.shape_summary import ShapeSummary
 from cad.supported_formats import collect_supported_files, is_supported_cad_file
 from core.file_queue import FileQueue
@@ -20,6 +22,14 @@ class FakeTopExpExplorer:
 
     def Next(self) -> None:
         self.remaining -= 1
+
+
+class FakeVertex:
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+    def IsSame(self, other: object) -> bool:
+        return isinstance(other, FakeVertex) and self.name == other.name
 
 
 class SupportedFormatTests(unittest.TestCase):
@@ -151,11 +161,37 @@ class GeometryAnalyzerTests(unittest.TestCase):
         self.assertEqual(result.width_mm, 20.0)
         self.assertEqual(result.height_mm, 10.0)
         self.assertEqual(result.face_count, 6)
-        self.assertIn("Вытянутая", result.profile_hint)
+        self.assertEqual(result.profile_hint, "Прямоугольная профильная труба")
 
     def test_analyze_shape_requires_shape_or_summary(self) -> None:
         with self.assertRaises(ValueError):
             analyze_shape(None)
+
+    def test_profile_detector_marks_rectangular_tube_from_bbox(self) -> None:
+        profile = detect_profile_from_dimensions(1000.0, 80.0, 40.0)
+
+        self.assertEqual(profile.profile_type, "Прямоугольная профильная труба")
+        self.assertEqual(profile.confidence, "средняя")
+
+    def test_pierce_counter_groups_connected_edges(self) -> None:
+        a = FakeVertex("a")
+        b = FakeVertex("b")
+        c = FakeVertex("c")
+        d = FakeVertex("d")
+        e = FakeVertex("e")
+        f = FakeVertex("f")
+
+        estimate = _count_components_from_pairs(
+            (
+                (a, b),
+                (b, c),
+                (d, e),
+                (e, f),
+                (f, d),
+            )
+        )
+
+        self.assertEqual(estimate.pierce_count, 2)
 
 
 if __name__ == "__main__":

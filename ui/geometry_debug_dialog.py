@@ -18,17 +18,25 @@ from PySide6.QtWidgets import (
 )
 
 from cad.analyzer import GeometryAnalysisResult, analyze_shape
+from cad.cut_length_calculator import CutLengthCalculator
+from cad.edge_classifier import EdgeClassifier, classify_cut_edges
+from cad.pierce_counter import PierceCounter, count_edge_components
 
 if TYPE_CHECKING:
     from core.file_job import FileJob
     from cad.shape_summary import ShapeSummary
 
 
-DEFAULT_SCRIPT = """# Доступно: shape, job, summary, result, analyze_shape
+DEFAULT_SCRIPT = """# Доступно: shape, job, summary, result, analyze_shape, classify_cut_edges
 print("Файл:", job.name if job else "<нет>")
 print()
 print(result.to_text())
 
+# Пример быстрой проверки ребер реза:
+# edges = classify_cut_edges(shape, summary=summary, length_axis=result.length_axis)
+# print("Ребер реза:", edges.cut_edge_count)
+# print("Длина реза:", edges.cut_length_mm)
+#
 # Пример: получить словарь для быстрой проверки полей
 # print(result.as_dict())
 """
@@ -133,6 +141,11 @@ class GeometryDebugDialog(QDialog):
             "result": result,
             "analysis": result,
             "analyze_shape": analyze_shape,
+            "classify_cut_edges": classify_cut_edges,
+            "count_edge_components": count_edge_components,
+            "CutLengthCalculator": CutLengthCalculator,
+            "EdgeClassifier": EdgeClassifier,
+            "PierceCounter": PierceCounter,
         }
 
     def _refresh_context_label(self) -> None:

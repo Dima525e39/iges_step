@@ -3,7 +3,10 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from cad.edge_classifier import classify_cut_edges
 from cad.importer import CadImporter
+from cad.pierce_counter import count_edge_components
+from cad.profile_detector import detect_profile_from_dimensions
 from cad.shape_summary import ShapeSummary, _count_topology, summarize_shape
 
 
@@ -22,6 +25,10 @@ class GeometryAnalysisResult:
     edge_count: int
     solid_count: int
     shell_count: int
+    cut_length_mm: float = 0.0
+    pierce_count: int = 0
+    cut_edge_count: int = 0
+    outer_face_count: int = 0
     warnings: tuple[str, ...] = ()
 
     def as_dict(self) -> dict[str, object]:
@@ -40,6 +47,10 @@ class GeometryAnalysisResult:
             ),
             f"Топология: solid={self.solid_count}, shell={self.shell_count}, "
             f"faces={self.face_count}, edges={self.edge_count}",
+            f"Длина реза (предварительно): {self.cut_length_mm:.3f} мм",
+            f"Врезки/контуры (предварительно): {self.pierce_count}",
+            f"Кандидатов ребер реза: {self.cut_edge_count}",
+            f"Наружных продольных граней: {self.outer_face_count}",
         ]
         if self.warnings:
             lines.append("Предупреждения:")
@@ -96,11 +107,34 @@ def analyze_shape(
         solid_count = _count_topology_safely(shape, "TopAbs_SOLID", warnings)
         shell_count = _count_topology_safely(shape, "TopAbs_SHELL", warnings)
 
-    profile_hint = _detect_profile_hint(length_mm, width_mm, height_mm)
+    profile = detect_profile_from_dimensions(length_mm, width_mm, height_mm)
+    profile_hint = profile.profile_type
+    cut_length_mm = 0.0
+    pierce_count = 0
+    cut_edge_count = 0
+    outer_face_count = 0
     if min(sizes.values()) <= 0.0:
         warnings.append("Один из габаритов равен нулю; модель может быть поверхностной.")
     if solid_count == 0 and shell_count > 0:
         warnings.append("Найдены оболочки без solid-тела; толщину стенки пока нельзя определить надежно.")
+    if shape is not None:
+        classification = classify_cut_edges(
+            shape,
+            summary=summary,
+            length_axis=length_axis,
+        )
+        pierce_estimate = count_edge_components(classification.cut_edges)
+        cut_length_mm = classification.cut_length_mm
+        pierce_count = pierce_estimate.pierce_count
+        cut_edge_count = classification.cut_edge_count
+        outer_face_count = classification.outer_face_count
+        warnings.extend(classification.warnings)
+        warnings.extend(pierce_estimate.warnings)
+        if cut_length_mm > 0.0:
+            warnings.append(
+                "Длина реза рассчитана предварительно по ребрам наружной поверхности; "
+                "проверьте результат через DEV-скрипт."
+            )
 
     return GeometryAnalysisResult(
         file_format=file_format,
@@ -116,25 +150,12 @@ def analyze_shape(
         edge_count=int(summary.edge_count),
         solid_count=solid_count,
         shell_count=shell_count,
+        cut_length_mm=cut_length_mm,
+        pierce_count=pierce_count,
+        cut_edge_count=cut_edge_count,
+        outer_face_count=outer_face_count,
         warnings=tuple(warnings),
     )
-
-
-def _detect_profile_hint(length_mm: float, width_mm: float, height_mm: float) -> str:
-    max_cross = max(width_mm, height_mm)
-    min_cross = min(width_mm, height_mm)
-    if length_mm <= 0.0 or max_cross <= 0.0:
-        return "Не определено"
-
-    slender_ratio = length_mm / max_cross
-    cross_ratio = abs(width_mm - height_mm) / max_cross
-    if slender_ratio >= 3.0 and cross_ratio <= 0.08:
-        return "Вытянутая труба/профиль с почти равным сечением"
-    if slender_ratio >= 3.0:
-        return "Вытянутая профильная труба/деталь"
-    if min_cross / max(length_mm, max_cross) <= 0.05:
-        return "Плоская деталь/лист по габаритам"
-    return "Объемная деталь; тип трубы требует уточнения"
 
 
 def _count_topology_safely(shape: object, top_abs_name: str, warnings: list[str]) -> int:
