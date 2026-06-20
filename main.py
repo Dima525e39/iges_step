@@ -12,6 +12,10 @@ def main() -> int:
         return _run_import_self_test(output_path)
 
     from PySide6.QtWidgets import QApplication
+    from cad.outer_contour_patch import install_outer_contour_patch
+
+    install_outer_contour_patch()
+
     from ui.main_window import MainWindow
 
     _install_wall_thickness_ui_patch(MainWindow)

@@ -1,3 +1,3 @@
-TubeCutCalculator v0.4.3
+TubeCutCalculator v0.4.4
 Build date: 2026-06-19
-Description: STEP/IGES import, 3D viewer, temporary DEV script window, basic tube analysis, thickness-face cut length, pierce count, wall thickness, and price estimate.
+Description: STEP/IGES import, 3D viewer, temporary DEV script window, basic tube analysis, outer contour cut length, end pierces, wall thickness, and price estimate.
