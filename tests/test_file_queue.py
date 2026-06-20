@@ -4,7 +4,9 @@ import sys
 import types
 import unittest
 
+from cad.analyzer import GeometryAnalysisResult, analyze_shape
 from cad.importer import CadImportError, CadImporter
+from cad.shape_summary import ShapeSummary
 from cad.supported_formats import collect_supported_files, is_supported_cad_file
 from core.file_queue import FileQueue
 
@@ -128,6 +130,32 @@ class CadImporterTests(unittest.TestCase):
                     sys.modules.pop(name, None)
                 else:
                     sys.modules[name] = original
+
+
+class GeometryAnalyzerTests(unittest.TestCase):
+    def test_analyze_shape_uses_longest_bounding_box_axis_as_length(self) -> None:
+        summary = ShapeSummary(
+            diagonal_mm=105.0,
+            size_x_mm=20.0,
+            size_y_mm=10.0,
+            size_z_mm=100.0,
+            face_count=6,
+            edge_count=12,
+        )
+
+        result = analyze_shape(None, summary=summary, file_format="STEP")
+
+        self.assertIsInstance(result, GeometryAnalysisResult)
+        self.assertEqual(result.length_axis, "Z")
+        self.assertEqual(result.length_mm, 100.0)
+        self.assertEqual(result.width_mm, 20.0)
+        self.assertEqual(result.height_mm, 10.0)
+        self.assertEqual(result.face_count, 6)
+        self.assertIn("Вытянутая", result.profile_hint)
+
+    def test_analyze_shape_requires_shape_or_summary(self) -> None:
+        with self.assertRaises(ValueError):
+            analyze_shape(None)
 
 
 if __name__ == "__main__":

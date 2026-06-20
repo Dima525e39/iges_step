@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
 )
 
 from app_info import APP_DESCRIPTION, APP_NAME, APP_VERSION
+from cad.analyzer import GeometryAnalysisResult, analyze_shape
 from cad.shape_summary import ShapeSummary
 from core.file_job import (
     PLACEHOLDER,
@@ -41,6 +42,7 @@ from settings.settings_manager import SettingsManager
 from ui.drop_helpers import local_paths_from_mime_data
 from ui.file_drop_area import FileDropArea
 from ui.file_list_widget import FileListWidget
+from ui.geometry_debug_dialog import GeometryDebugDialog
 from ui.import_worker import CadImportWorker
 from ui.viewer_2d import Viewer2D
 from ui.viewer_3d import Viewer3D
@@ -53,8 +55,10 @@ class MainWindow(QMainWindow):
         self.settings_manager = SettingsManager()
         self.imported_shapes: dict[str, object] = {}
         self.shape_summaries: dict[str, ShapeSummary] = {}
+        self.shape_analyses: dict[str, GeometryAnalysisResult] = {}
         self.import_thread: QThread | None = None
         self.import_worker: CadImportWorker | None = None
+        self.geometry_debug_dialog: GeometryDebugDialog | None = None
 
         self.setAcceptDrops(True)
         self.setWindowTitle(f"{APP_NAME} {APP_VERSION}")
@@ -87,10 +91,19 @@ class MainWindow(QMainWindow):
         content_splitter.setStretchFactor(0, 0)
         content_splitter.setStretchFactor(1, 1)
         content_splitter.setStretchFactor(2, 0)
-        root_layout.addWidget(content_splitter, stretch=1)
+        content_splitter.setChildrenCollapsible(False)
 
         bottom_panel = self._build_bottom_panel()
-        root_layout.addWidget(bottom_panel, stretch=1)
+        bottom_panel.setMinimumHeight(160)
+
+        self.vertical_splitter = QSplitter(Qt.Orientation.Vertical)
+        self.vertical_splitter.addWidget(content_splitter)
+        self.vertical_splitter.addWidget(bottom_panel)
+        self.vertical_splitter.setStretchFactor(0, 3)
+        self.vertical_splitter.setStretchFactor(1, 1)
+        self.vertical_splitter.setChildrenCollapsible(False)
+        self.vertical_splitter.setSizes([560, 220])
+        root_layout.addWidget(self.vertical_splitter, stretch=1)
 
     def _build_left_panel(self) -> QWidget:
         panel = QWidget()
@@ -199,6 +212,10 @@ class MainWindow(QMainWindow):
         self.warning_label.setWordWrap(True)
         warnings_layout.addWidget(self.warning_label)
         layout.addWidget(warnings_group, stretch=1)
+
+        self.geometry_debug_button = QPushButton("DEV: скрипт анализа")
+        self.geometry_debug_button.setEnabled(False)
+        layout.addWidget(self.geometry_debug_button)
         return panel
 
     def _make_money_input(self, value: float) -> QDoubleSpinBox:
@@ -262,6 +279,7 @@ class MainWindow(QMainWindow):
         self.file_table.pathsDropped.connect(self._add_paths)
         self.file_table.itemSelectionChanged.connect(self._sync_from_table_selection)
         self.compact_list.currentRowChanged.connect(self._sync_from_compact_selection)
+        self.geometry_debug_button.clicked.connect(self._open_geometry_debugger)
 
     def _choose_files(self) -> None:
         paths, _ = QFileDialog.getOpenFileNames(
@@ -301,6 +319,7 @@ class MainWindow(QMainWindow):
         self.queue.clear()
         self.imported_shapes.clear()
         self.shape_summaries.clear()
+        self.shape_analyses.clear()
         self._refresh_jobs()
 
     def _remove_selected_jobs(self) -> None:
@@ -312,6 +331,7 @@ class MainWindow(QMainWindow):
             key = str(path)
             self.imported_shapes.pop(key, None)
             self.shape_summaries.pop(key, None)
+            self.shape_analyses.pop(key, None)
         self._refresh_jobs()
 
     def _process_selected(self) -> None:
@@ -363,6 +383,7 @@ class MainWindow(QMainWindow):
             job.warnings.clear()
             self.imported_shapes.pop(job.normalized_path, None)
             self.shape_summaries.pop(job.normalized_path, None)
+            self.shape_analyses.pop(job.normalized_path, None)
 
         self._set_import_controls_enabled(False)
         self.statusBar().showMessage(f"Импорт файлов: {len(import_jobs)}")
@@ -380,7 +401,13 @@ class MainWindow(QMainWindow):
         self.import_thread.finished.connect(self.import_thread.deleteLater)
         self.import_thread.start()
 
-    def _on_import_progress(self, path: str, result: object, summary: object) -> None:
+    def _on_import_progress(
+        self,
+        path: str,
+        result: object,
+        summary: object,
+        analysis: object,
+    ) -> None:
         job = self.queue.get(path)
         if job is None:
             return
@@ -388,21 +415,25 @@ class MainWindow(QMainWindow):
         shape = getattr(result, "shape")
         file_format = getattr(result, "file_format", "CAD")
         shape_summary = summary
+        geometry_analysis = analysis
         self.imported_shapes[job.normalized_path] = shape
         self.shape_summaries[job.normalized_path] = shape_summary
+        self.shape_analyses[job.normalized_path] = geometry_analysis
 
         job.status = STATUS_IMPORTED
-        job.tube_type = str(file_format)
-        job.tube_length_mm = self._format_model_length(shape_summary)
+        job.tube_type = getattr(geometry_analysis, "profile_hint", str(file_format))
+        job.tube_length_mm = self._format_analysis_length(geometry_analysis)
         job.wall_thickness_mm = PLACEHOLDER
         job.cut_length_mm = PLACEHOLDER
         job.pierce_count = PLACEHOLDER
         job.price = PLACEHOLDER
         job.error_text = ""
         job.warnings = [
-            self._format_shape_summary(shape_summary),
+            self._format_analysis_summary(geometry_analysis),
             "Расчет длины реза и количества врезок будет добавлен после этапа анализа геометрии.",
         ]
+        analysis_warnings = getattr(geometry_analysis, "warnings", ())
+        job.warnings.extend(str(warning) for warning in analysis_warnings)
 
         self._refresh_jobs()
         current_job = self._current_job()
@@ -422,6 +453,7 @@ class MainWindow(QMainWindow):
         ]
         self.imported_shapes.pop(job.normalized_path, None)
         self.shape_summaries.pop(job.normalized_path, None)
+        self.shape_analyses.pop(job.normalized_path, None)
         self._refresh_jobs()
 
     def _finish_import_thread(self) -> None:
@@ -450,6 +482,25 @@ class MainWindow(QMainWindow):
             getattr(summary, "size_z_mm", 0.0),
         ]
         return f"{max(sizes):.1f} мм"
+
+    def _format_analysis_length(self, analysis: object) -> str:
+        return (
+            f"{getattr(analysis, 'length_mm', 0.0):.1f} мм "
+            f"({getattr(analysis, 'length_axis', '—')})"
+        )
+
+    def _format_analysis_summary(self, analysis: object) -> str:
+        return (
+            "Базовый анализ геометрии выполнен. "
+            f"Тип: {getattr(analysis, 'profile_hint', '—')}; "
+            f"габариты: {getattr(analysis, 'size_x_mm', 0.0):.1f} x "
+            f"{getattr(analysis, 'size_y_mm', 0.0):.1f} x "
+            f"{getattr(analysis, 'size_z_mm', 0.0):.1f} мм; "
+            f"solid: {getattr(analysis, 'solid_count', 0)}, "
+            f"shell: {getattr(analysis, 'shell_count', 0)}, "
+            f"граней: {getattr(analysis, 'face_count', 0)}, "
+            f"ребер: {getattr(analysis, 'edge_count', 0)}."
+        )
 
     def _format_shape_summary(self, summary: object) -> str:
         return (
@@ -520,11 +571,21 @@ class MainWindow(QMainWindow):
 
     def _show_selected_job(self, job: FileJob | None) -> None:
         shape = self.imported_shapes.get(job.normalized_path) if job is not None else None
+        summary = self.shape_summaries.get(job.normalized_path) if job is not None else None
+        analysis = self.shape_analyses.get(job.normalized_path) if job is not None else None
         if shape is None:
             self.viewer_3d.show_job(job)
         else:
             self.viewer_3d.show_shape(shape, job.name)
         self.viewer_2d.show_job(job)
+        self.geometry_debug_button.setEnabled(shape is not None)
+        if self.geometry_debug_dialog is not None:
+            self.geometry_debug_dialog.set_context(
+                job=job,
+                shape=shape,
+                summary=summary,
+                analysis=analysis,
+            )
 
         if job is None:
             values = ["—"] * 8
@@ -555,6 +616,50 @@ class MainWindow(QMainWindow):
         for label, value in zip(labels, values, strict=True):
             label.setText(value)
         self.warning_label.setText(warnings)
+
+    def _open_geometry_debugger(self) -> None:
+        job = self._current_job()
+        if job is None:
+            QMessageBox.information(self, "DEV: анализ", "Выберите импортированный файл.")
+            return
+
+        shape = self.imported_shapes.get(job.normalized_path)
+        if shape is None:
+            QMessageBox.information(
+                self,
+                "DEV: анализ",
+                "Сначала импортируйте выбранный файл.",
+            )
+            return
+
+        summary = self.shape_summaries.get(job.normalized_path)
+        analysis = self.shape_analyses.get(job.normalized_path)
+        if analysis is None:
+            analysis = analyze_shape(shape, summary=summary)
+            self.shape_analyses[job.normalized_path] = analysis
+
+        if self.geometry_debug_dialog is None:
+            self.geometry_debug_dialog = GeometryDebugDialog(
+                self,
+                job=job,
+                shape=shape,
+                summary=summary,
+                analysis=analysis,
+            )
+            self.geometry_debug_dialog.destroyed.connect(self._on_geometry_debugger_closed)
+        else:
+            self.geometry_debug_dialog.set_context(
+                job=job,
+                shape=shape,
+                summary=summary,
+                analysis=analysis,
+            )
+        self.geometry_debug_dialog.show()
+        self.geometry_debug_dialog.raise_()
+        self.geometry_debug_dialog.activateWindow()
+
+    def _on_geometry_debugger_closed(self, *_args: object) -> None:
+        self.geometry_debug_dialog = None
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
         if local_paths_from_mime_data(event.mimeData()):

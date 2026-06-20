@@ -46,12 +46,15 @@ def _run_import_self_test(output_path: Path | None) -> int:
         record(f"PySide6 Qt {qVersion()}: OK")
 
         from OCC.Core.Bnd import Bnd_Box
+        from OCC.Core.BRepAdaptor import BRepAdaptor_Surface
         from OCC.Core.IFSelect import IFSelect_RetDone
+        from OCC.Core.GProp import GProp_GProps
         from OCC.Core.IGESControl import IGESControl_Reader
         from OCC.Core.Interface import Interface_Static
         from OCC.Core.STEPControl import STEPControl_Reader
-        from OCC.Core.TopAbs import TopAbs_EDGE, TopAbs_FACE
+        from OCC.Core.TopAbs import TopAbs_EDGE, TopAbs_FACE, TopAbs_SHELL, TopAbs_SOLID
         from OCC.Core.TopExp import TopExp_Explorer
+        from OCC.Core.TopTools import TopTools_IndexedMapOfShape
         from OCC.Core.TopoDS import TopoDS_Shape
 
         try:
@@ -69,18 +72,41 @@ def _run_import_self_test(output_path: Path | None) -> int:
             IFSelect_RetDone,
             IGESControl_Reader,
             Interface_Static,
+            BRepAdaptor_Surface,
+            GProp_GProps,
             STEPControl_Reader,
             TopAbs_EDGE,
             TopAbs_FACE,
+            TopAbs_SHELL,
+            TopAbs_SOLID,
             TopExp_Explorer,
+            TopTools_IndexedMapOfShape,
             TopoDS_Shape,
         )
         record("pythonocc-core import modules: OK")
 
+        from cad.analyzer import analyze_shape
         from cad.shape_summary import _count_topology
 
         _count_topology(TopoDS_Shape(), TopAbs_FACE)
         record("shape summary topology helper: OK")
+
+        analyze_shape(
+            None,
+            summary=type(
+                "SelfTestSummary",
+                (),
+                {
+                    "size_x_mm": 10.0,
+                    "size_y_mm": 20.0,
+                    "size_z_mm": 100.0,
+                    "face_count": 6,
+                    "edge_count": 12,
+                },
+            )(),
+            file_format="SELFTEST",
+        )
+        record("geometry analyzer helper: OK")
     except Exception as exc:
         exit_code = 1
         record(f"FAILED: {exc.__class__.__name__}: {exc}")
