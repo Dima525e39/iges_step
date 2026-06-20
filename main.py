@@ -53,7 +53,13 @@ def _run_import_self_test(output_path: Path | None) -> int:
         from OCC.Core.IGESControl import IGESControl_Reader
         from OCC.Core.Interface import Interface_Static
         from OCC.Core.STEPControl import STEPControl_Reader
-        from OCC.Core.TopAbs import TopAbs_EDGE, TopAbs_FACE, TopAbs_SHELL, TopAbs_SOLID
+        from OCC.Core.TopAbs import (
+            TopAbs_EDGE,
+            TopAbs_FACE,
+            TopAbs_SHELL,
+            TopAbs_SOLID,
+            TopAbs_WIRE,
+        )
         from OCC.Core.TopExp import TopExp_Explorer
         from OCC.Core.TopTools import TopTools_IndexedMapOfShape
         from OCC.Core.TopoDS import TopoDS_Shape
@@ -81,6 +87,7 @@ def _run_import_self_test(output_path: Path | None) -> int:
             TopAbs_FACE,
             TopAbs_SHELL,
             TopAbs_SOLID,
+            TopAbs_WIRE,
             TopExp_Explorer,
             TopTools_IndexedMapOfShape,
             TopoDS_Shape,

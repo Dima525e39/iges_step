@@ -204,7 +204,36 @@ class GeometryAnalyzerTests(unittest.TestCase):
 
         self.assertEqual(estimate.pierce_count, 1)
 
-    def test_cut_edge_candidate_accepts_short_outer_face_transition(self) -> None:
+    def test_cut_edge_candidate_accepts_outer_cut_face_boundary(self) -> None:
+        outer_face = FaceRecord(
+            face=object(),
+            bounds=Bounds(0.0, 0.0, 0.0, 80.0, 0.0, 1000.0),
+            is_outer_longitudinal=True,
+        )
+        cut_face = FaceRecord(
+            face=object(),
+            bounds=Bounds(70.0, 0.0, 430.0, 80.0, 20.0, 470.0),
+            is_outer_longitudinal=False,
+        )
+        edge = EdgeRecord(
+            edge=object(),
+            length_mm=35.0,
+            bounds=Bounds(70.0, 0.0, 450.0, 80.0, 20.0, 450.0),
+            faces=[outer_face, cut_face],
+        )
+
+        self.assertTrue(
+            _is_cut_edge_candidate(
+                edge,
+                axis="Z",
+                length_mm=1000.0,
+                has_outer_faces=True,
+                tolerance=0.01,
+            )
+        )
+        self.assertEqual(edge.reason, "outer/cut face boundary")
+
+    def test_cut_edge_candidate_accepts_marked_outer_wire_segment(self) -> None:
         first_face = FaceRecord(
             face=object(),
             bounds=Bounds(0.0, 0.0, 0.0, 80.0, 0.0, 1000.0),
@@ -220,6 +249,7 @@ class GeometryAnalyzerTests(unittest.TestCase):
             length_mm=35.0,
             bounds=Bounds(70.0, 0.0, 450.0, 80.0, 20.0, 450.0),
             faces=[first_face, second_face],
+            wire_roles={"outer_wire_cut"},
         )
 
         self.assertTrue(
@@ -231,7 +261,7 @@ class GeometryAnalyzerTests(unittest.TestCase):
                 tolerance=0.01,
             )
         )
-        self.assertEqual(edge.reason, "outer face transition boundary")
+        self.assertEqual(edge.reason, "outer wire cut segment")
 
     def test_cut_edge_candidate_rejects_longitudinal_tube_seam(self) -> None:
         first_face = FaceRecord(

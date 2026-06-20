@@ -43,6 +43,16 @@ class FaceRecord:
 
 
 @dataclass(slots=True)
+class WireRecord:
+    wire: object
+    face: FaceRecord
+    edges: tuple[object, ...]
+    length_mm: float
+    bounds: Bounds | None = None
+    is_outer_wire: bool = False
+
+
+@dataclass(slots=True)
 class EdgeRecord:
     edge: object
     length_mm: float
@@ -52,6 +62,7 @@ class EdgeRecord:
     end_vertex: object | None = None
     start_point: tuple[float, float, float] | None = None
     end_point: tuple[float, float, float] | None = None
+    wire_roles: set[str] = field(default_factory=set)
     reason: str = ""
 
     @property
@@ -61,6 +72,10 @@ class EdgeRecord:
     @property
     def outer_face_count(self) -> int:
         return sum(1 for face in self.faces if face.is_outer_longitudinal)
+
+    @property
+    def non_outer_face_count(self) -> int:
+        return self.adjacent_face_count - self.outer_face_count
 
 
 @dataclass(slots=True)
@@ -120,7 +135,13 @@ def classify_cut_edges(
         tolerance=tolerance,
         warnings=warnings,
     )
-    edge_records = _collect_edge_records(face_records, warnings=warnings)
+    edge_records = _collect_edge_records(
+        face_records,
+        axis=axis,
+        length_mm=length_mm,
+        tolerance=tolerance,
+        warnings=warnings,
+    )
 
     outer_face_count = sum(1 for face in face_records if face.is_outer_longitudinal)
     if outer_face_count == 0:
@@ -188,26 +209,103 @@ def _collect_face_records(
 def _collect_edge_records(
     face_records: Iterable[FaceRecord],
     *,
+    axis: str,
+    length_mm: float,
+    tolerance: float,
     warnings: list[str],
 ) -> list[EdgeRecord]:
     from OCC.Core.TopAbs import TopAbs_EDGE
 
     records: list[EdgeRecord] = []
     for face_record in face_records:
+        wire_records = _collect_wire_records(face_record, warnings=warnings)
+        if wire_records:
+            outer_wire = _choose_outer_wire(wire_records)
+            for wire_record in wire_records:
+                wire_record.is_outer_wire = wire_record is outer_wire
+                for edge in wire_record.edges:
+                    record = _get_or_create_edge_record(records, edge, warnings)
+                    _append_unique_face(record, face_record)
+                    if not wire_record.is_outer_wire:
+                        record.wire_roles.add("inner_wire")
+                    elif _is_outer_wire_cut_segment(
+                        record,
+                        face_record=face_record,
+                        axis=axis,
+                        length_mm=length_mm,
+                        tolerance=tolerance,
+                    ):
+                        record.wire_roles.add("outer_wire_cut")
+            continue
+
         for edge in _iter_shapes(face_record.face, TopAbs_EDGE):
-            record = _find_same_edge(records, edge)
-            if record is None:
-                record = EdgeRecord(
-                    edge=edge,
-                    length_mm=_edge_length(edge, warnings),
-                    bounds=_safe_bounds(edge),
-                )
-                record.start_vertex, record.end_vertex = _edge_vertices(edge)
-                record.start_point = _vertex_point(record.start_vertex)
-                record.end_point = _vertex_point(record.end_vertex)
-                records.append(record)
-            record.faces.append(face_record)
+            record = _get_or_create_edge_record(records, edge, warnings)
+            _append_unique_face(record, face_record)
     return records
+
+
+def _collect_wire_records(
+    face_record: FaceRecord,
+    *,
+    warnings: list[str],
+) -> list[WireRecord]:
+    try:
+        from OCC.Core.TopAbs import TopAbs_EDGE, TopAbs_WIRE
+    except Exception as exc:
+        warnings.append(f"Не удалось импортировать TopAbs_WIRE: {exc}")
+        return []
+
+    records: list[WireRecord] = []
+    for wire in _iter_shapes(face_record.face, TopAbs_WIRE):
+        edges: list[object] = []
+        length_mm = 0.0
+        for edge in _iter_shapes(wire, TopAbs_EDGE):
+            if any(_is_same_shape(edge, existing) for existing in edges):
+                continue
+            edges.append(edge)
+            length_mm += _edge_length(edge, warnings)
+        if edges:
+            records.append(
+                WireRecord(
+                    wire=wire,
+                    face=face_record,
+                    edges=tuple(edges),
+                    length_mm=length_mm,
+                    bounds=_safe_bounds(wire),
+                )
+            )
+    return records
+
+
+def _choose_outer_wire(wire_records: list[WireRecord]) -> WireRecord:
+    return max(wire_records, key=lambda wire: wire.length_mm)
+
+
+def _get_or_create_edge_record(
+    records: list[EdgeRecord],
+    edge: object,
+    warnings: list[str],
+) -> EdgeRecord:
+    record = _find_same_edge(records, edge)
+    if record is not None:
+        return record
+
+    record = EdgeRecord(
+        edge=edge,
+        length_mm=_edge_length(edge, warnings),
+        bounds=_safe_bounds(edge),
+    )
+    record.start_vertex, record.end_vertex = _edge_vertices(edge)
+    record.start_point = _vertex_point(record.start_vertex)
+    record.end_point = _vertex_point(record.end_vertex)
+    records.append(record)
+    return record
+
+
+def _append_unique_face(record: EdgeRecord, face_record: FaceRecord) -> None:
+    if any(_is_same_shape(face_record.face, existing.face) for existing in record.faces):
+        return
+    record.faces.append(face_record)
 
 
 def _is_cut_edge_candidate(
@@ -226,11 +324,16 @@ def _is_cut_edge_candidate(
             return False
         if _looks_like_longitudinal_seam(edge, axis=axis, length_mm=length_mm):
             return False
-        if edge.outer_face_count == 1:
-            edge.reason = "outer face boundary"
-        else:
-            edge.reason = "outer face transition boundary"
-        return True
+        if edge.non_outer_face_count > 0:
+            edge.reason = "outer/cut face boundary"
+            return True
+        if "inner_wire" in edge.wire_roles:
+            edge.reason = "inner face wire"
+            return True
+        if "outer_wire_cut" in edge.wire_roles:
+            edge.reason = "outer wire cut segment"
+            return True
+        return False
 
     if edge.adjacent_face_count <= 1 and not _looks_like_longitudinal_seam(
         edge,
@@ -240,6 +343,60 @@ def _is_cut_edge_candidate(
         edge.reason = "open boundary fallback"
         return True
     return False
+
+
+def _is_outer_wire_cut_segment(
+    edge: EdgeRecord,
+    *,
+    face_record: FaceRecord,
+    axis: str,
+    length_mm: float,
+    tolerance: float,
+) -> bool:
+    if edge.bounds is None:
+        return False
+    if _looks_like_longitudinal_seam(edge, axis=axis, length_mm=length_mm):
+        return False
+    return not _looks_like_natural_face_frame_edge(
+        edge,
+        face_record=face_record,
+        axis=axis,
+        tolerance=tolerance,
+    )
+
+
+def _looks_like_natural_face_frame_edge(
+    edge: EdgeRecord,
+    *,
+    face_record: FaceRecord,
+    axis: str,
+    tolerance: float,
+) -> bool:
+    if edge.bounds is None:
+        return False
+    axis_index = AXIS_INDEX[axis]
+    face_sizes = face_record.bounds.sizes
+    edge_sizes = edge.bounds.sizes
+    cross_indexes = [index for index in range(3) if index != axis_index]
+
+    at_length_end = (
+        abs(edge.bounds.mins[axis_index] - face_record.bounds.mins[axis_index]) <= tolerance
+        or abs(edge.bounds.maxes[axis_index] - face_record.bounds.maxes[axis_index]) <= tolerance
+    )
+    if at_length_end and any(
+        edge_sizes[index] >= max(face_sizes[index] * 0.75, tolerance)
+        for index in cross_indexes
+    ):
+        return True
+
+    return any(
+        (
+            abs(edge.bounds.mins[index] - face_record.bounds.mins[index]) <= tolerance
+            or abs(edge.bounds.maxes[index] - face_record.bounds.maxes[index]) <= tolerance
+        )
+        and edge_sizes[axis_index] >= max(face_sizes[axis_index] * 0.75, tolerance)
+        for index in cross_indexes
+    )
 
 
 def _is_outer_longitudinal_face(
