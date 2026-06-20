@@ -51,7 +51,7 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force package | Out-Null
-          & "C:\Program Files\7-Zip\7z.exe" a -t7z -mx=9 package\TubeCutCalculator-v0.4.4-windows.7z dist\TubeCutCalculator.exe dist\version.txt
+          & "C:\Program Files\7-Zip\7z.exe" a -t7z -mx=9 package\TubeCutCalculator-v0.4.5-windows.7z dist\TubeCutCalculator.exe dist\version.txt
           Get-ChildItem -Recurse package
 
       - name: Upload artifact

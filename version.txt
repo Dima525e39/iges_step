@@ -1,3 +1,3 @@
-TubeCutCalculator v0.4.4
-Build date: 2026-06-19
-Description: STEP/IGES import, 3D viewer, temporary DEV script window, basic tube analysis, outer contour cut length, end pierces, wall thickness, and price estimate.
+TubeCutCalculator v0.4.5
+Build date: 2026-06-21
+Description: STEP/IGES import, 3D viewer, temporary DEV script window, diagnostic 2D unfolding preview, basic tube analysis, cut length, pierces, wall thickness, and price estimate.

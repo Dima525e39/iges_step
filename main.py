@@ -19,6 +19,7 @@ def main() -> int:
     from ui.main_window import MainWindow
 
     _install_wall_thickness_ui_patch(MainWindow)
+    _install_unfolding_viewer_patch(MainWindow)
 
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
@@ -55,6 +56,39 @@ def _install_wall_thickness_ui_patch(main_window_cls: type) -> None:
         self._refresh_jobs()
 
     main_window_cls._on_import_progress = on_import_progress_with_wall_thickness
+
+
+def _install_unfolding_viewer_patch(main_window_cls: type) -> None:
+    if getattr(main_window_cls, "_unfolding_viewer_patch_installed", False):
+        return
+
+    original_show_selected_job = main_window_cls._show_selected_job
+
+    def show_selected_job_with_unfolding(self: object, job: object | None) -> None:
+        original_show_selected_job(self, job)
+        viewer = getattr(self, "viewer_2d", None)
+        if viewer is None or not hasattr(viewer, "show_unfolding"):
+            return
+        if job is None:
+            viewer.show_job(None)
+            return
+
+        normalized_path = getattr(job, "normalized_path", "")
+        shape = getattr(self, "imported_shapes", {}).get(normalized_path)
+        summary = getattr(self, "shape_summaries", {}).get(normalized_path)
+        analysis = getattr(self, "shape_analyses", {}).get(normalized_path)
+        if shape is None:
+            viewer.show_job(job)
+            return
+        viewer.show_unfolding(
+            job,
+            shape=shape,
+            summary=summary,
+            analysis=analysis,
+        )
+
+    main_window_cls._show_selected_job = show_selected_job_with_unfolding
+    main_window_cls._unfolding_viewer_patch_installed = True
 
 
 def _self_test_output_path(args: list[str]) -> Path | None:
@@ -131,6 +165,7 @@ def _run_import_self_test(output_path: Path | None) -> int:
         from cad.analyzer import analyze_shape
         from cad.profile_detector import detect_profile_from_dimensions
         from cad.shape_summary import _count_topology
+        from cad.unfolder import TubeUnfolder, build_unfolding_preview_from_edges
 
         _count_topology(TopoDS_Shape(), TopAbs_FACE)
         record("shape summary topology helper: OK")
@@ -154,6 +189,9 @@ def _run_import_self_test(output_path: Path | None) -> int:
 
         detect_profile_from_dimensions(100.0, 20.0, 10.0)
         record("profile detector helper: OK")
+
+        _ = (TubeUnfolder, build_unfolding_preview_from_edges)
+        record("unfolding preview helper: OK")
     except Exception as exc:
         exit_code = 1
         record(f"FAILED: {exc.__class__.__name__}: {exc}")
