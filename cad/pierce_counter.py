@@ -4,6 +4,8 @@ from dataclasses import dataclass
 
 from cad.edge_classifier import EdgeClassificationResult, EdgeRecord
 
+POINT_TOLERANCE_MM = 0.01
+
 
 @dataclass(slots=True)
 class PierceEstimate:
@@ -25,7 +27,13 @@ def count_edge_components(edges: tuple[EdgeRecord, ...]) -> PierceEstimate:
     if not edges:
         return PierceEstimate(pierce_count=0)
 
-    pairs = tuple((edge.start_vertex, edge.end_vertex) for edge in edges)
+    pairs = tuple(
+        (
+            _endpoint_ref(edge.start_vertex, edge.start_point),
+            _endpoint_ref(edge.end_vertex, edge.end_point),
+        )
+        for edge in edges
+    )
     return _count_components_from_pairs(pairs)
 
 
@@ -78,7 +86,58 @@ def _count_components_from_pairs(
 
 
 def _is_same_vertex(first: object, second: object) -> bool:
+    first_vertex, first_point = _split_endpoint_ref(first)
+    second_vertex, second_point = _split_endpoint_ref(second)
+
+    if first_vertex is not None and second_vertex is not None:
+        if _is_same_vertex_object(first_vertex, second_vertex):
+            return True
+    if first_point is not None and second_point is not None:
+        return _points_are_close(first_point, second_point)
+    return False
+
+
+def _endpoint_ref(
+    vertex: object | None,
+    point: tuple[float, float, float] | None,
+) -> object | None:
+    if vertex is None and point is None:
+        return None
+    return (vertex, point)
+
+
+def _split_endpoint_ref(
+    endpoint: object,
+) -> tuple[object | None, tuple[float, float, float] | None]:
+    if (
+        isinstance(endpoint, tuple)
+        and len(endpoint) == 2
+        and (endpoint[1] is None or _is_point_tuple(endpoint[1]))
+    ):
+        return endpoint
+    return endpoint, None
+
+
+def _is_point_tuple(value: object) -> bool:
+    return (
+        isinstance(value, tuple)
+        and len(value) == 3
+        and all(isinstance(item, (int, float)) for item in value)
+    )
+
+
+def _is_same_vertex_object(first: object, second: object) -> bool:
     try:
         return bool(first.IsSame(second))
     except Exception:
         return first is second or first == second
+
+
+def _points_are_close(
+    first: tuple[float, float, float],
+    second: tuple[float, float, float],
+) -> bool:
+    return all(
+        abs(first_value - second_value) <= POINT_TOLERANCE_MM
+        for first_value, second_value in zip(first, second, strict=True)
+    )

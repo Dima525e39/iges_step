@@ -50,6 +50,8 @@ class EdgeRecord:
     faces: list[FaceRecord] = field(default_factory=list)
     start_vertex: object | None = None
     end_vertex: object | None = None
+    start_point: tuple[float, float, float] | None = None
+    end_point: tuple[float, float, float] | None = None
     reason: str = ""
 
     @property
@@ -201,6 +203,8 @@ def _collect_edge_records(
                     bounds=_safe_bounds(edge),
                 )
                 record.start_vertex, record.end_vertex = _edge_vertices(edge)
+                record.start_point = _vertex_point(record.start_vertex)
+                record.end_point = _vertex_point(record.end_vertex)
                 records.append(record)
             record.faces.append(face_record)
     return records
@@ -218,11 +222,14 @@ def _is_cut_edge_candidate(
         return False
 
     if has_outer_faces:
-        if edge.outer_face_count != 1:
+        if edge.outer_face_count <= 0:
             return False
         if _looks_like_longitudinal_seam(edge, axis=axis, length_mm=length_mm):
             return False
-        edge.reason = "outer face boundary"
+        if edge.outer_face_count == 1:
+            edge.reason = "outer face boundary"
+        else:
+            edge.reason = "outer face transition boundary"
         return True
 
     if edge.adjacent_face_count <= 1 and not _looks_like_longitudinal_seam(
@@ -337,6 +344,45 @@ def _edge_vertices(edge: object) -> tuple[object | None, object | None]:
     except Exception:
         pass
     return None, None
+
+
+def _vertex_point(vertex: object | None) -> tuple[float, float, float] | None:
+    if vertex is None:
+        return None
+    try:
+        import OCC.Core.BRep as brep
+
+        methods = []
+        brep_tool = getattr(brep, "BRep_Tool", None)
+        if brep_tool is not None:
+            methods.extend(
+                method
+                for method in (
+                    getattr(brep_tool, "Pnt", None),
+                    getattr(brep_tool, "Pnt_s", None),
+                )
+                if method is not None
+            )
+        breptool = getattr(brep, "breptool", None)
+        if breptool is not None:
+            methods.extend(
+                method
+                for method in (
+                    getattr(breptool, "Pnt", None),
+                    getattr(breptool, "Pnt_s", None),
+                )
+                if method is not None
+            )
+        breptool_pnt = getattr(brep, "breptool_Pnt", None)
+        if breptool_pnt is not None:
+            methods.append(breptool_pnt)
+
+        for method in methods:
+            point = method(vertex)
+            return (float(point.X()), float(point.Y()), float(point.Z()))
+    except Exception:
+        return None
+    return None
 
 
 def _find_same_edge(records: list[EdgeRecord], edge: object) -> EdgeRecord | None:

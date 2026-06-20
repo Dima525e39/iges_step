@@ -5,6 +5,7 @@ import types
 import unittest
 
 from cad.analyzer import GeometryAnalysisResult, analyze_shape
+from cad.edge_classifier import Bounds, EdgeRecord, FaceRecord, _is_cut_edge_candidate
 from cad.importer import CadImportError, CadImporter
 from cad.pierce_counter import _count_components_from_pairs
 from cad.profile_detector import detect_profile_from_dimensions
@@ -192,6 +193,73 @@ class GeometryAnalyzerTests(unittest.TestCase):
         )
 
         self.assertEqual(estimate.pierce_count, 2)
+
+    def test_pierce_counter_groups_edges_by_matching_points(self) -> None:
+        estimate = _count_components_from_pairs(
+            (
+                ((None, (0.0, 0.0, 0.0)), (None, (10.0, 0.0, 0.0))),
+                ((None, (10.0, 0.0, 0.005)), (None, (20.0, 0.0, 0.0))),
+            )
+        )
+
+        self.assertEqual(estimate.pierce_count, 1)
+
+    def test_cut_edge_candidate_accepts_short_outer_face_transition(self) -> None:
+        first_face = FaceRecord(
+            face=object(),
+            bounds=Bounds(0.0, 0.0, 0.0, 80.0, 0.0, 1000.0),
+            is_outer_longitudinal=True,
+        )
+        second_face = FaceRecord(
+            face=object(),
+            bounds=Bounds(80.0, 0.0, 0.0, 80.0, 40.0, 1000.0),
+            is_outer_longitudinal=True,
+        )
+        edge = EdgeRecord(
+            edge=object(),
+            length_mm=35.0,
+            bounds=Bounds(70.0, 0.0, 450.0, 80.0, 20.0, 450.0),
+            faces=[first_face, second_face],
+        )
+
+        self.assertTrue(
+            _is_cut_edge_candidate(
+                edge,
+                axis="Z",
+                length_mm=1000.0,
+                has_outer_faces=True,
+                tolerance=0.01,
+            )
+        )
+        self.assertEqual(edge.reason, "outer face transition boundary")
+
+    def test_cut_edge_candidate_rejects_longitudinal_tube_seam(self) -> None:
+        first_face = FaceRecord(
+            face=object(),
+            bounds=Bounds(0.0, 0.0, 0.0, 80.0, 0.0, 1000.0),
+            is_outer_longitudinal=True,
+        )
+        second_face = FaceRecord(
+            face=object(),
+            bounds=Bounds(80.0, 0.0, 0.0, 80.0, 40.0, 1000.0),
+            is_outer_longitudinal=True,
+        )
+        edge = EdgeRecord(
+            edge=object(),
+            length_mm=1000.0,
+            bounds=Bounds(80.0, 0.0, 0.0, 80.0, 0.0, 1000.0),
+            faces=[first_face, second_face],
+        )
+
+        self.assertFalse(
+            _is_cut_edge_candidate(
+                edge,
+                axis="Z",
+                length_mm=1000.0,
+                has_outer_faces=True,
+                tolerance=0.01,
+            )
+        )
 
 
 if __name__ == "__main__":
