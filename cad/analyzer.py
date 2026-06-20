@@ -25,6 +25,7 @@ class GeometryAnalysisResult:
     edge_count: int
     solid_count: int
     shell_count: int
+    wall_thickness_mm: float = 0.0
     cut_length_mm: float = 0.0
     pierce_count: int = 0
     cut_edge_count: int = 0
@@ -47,6 +48,7 @@ class GeometryAnalysisResult:
             ),
             f"Топология: solid={self.solid_count}, shell={self.shell_count}, "
             f"faces={self.face_count}, edges={self.edge_count}",
+            f"Толщина стенки (предварительно): {self.wall_thickness_mm:.3f} мм",
             f"Длина реза (предварительно): {self.cut_length_mm:.3f} мм",
             f"Врезки/контуры (предварительно): {self.pierce_count}",
             f"Кандидатов ребер реза: {self.cut_edge_count}",
@@ -113,6 +115,7 @@ def analyze_shape(
     pierce_count = 0
     cut_edge_count = 0
     outer_face_count = 0
+    wall_thickness_mm = 0.0
     if min(sizes.values()) <= 0.0:
         warnings.append("Один из габаритов равен нулю; модель может быть поверхностной.")
     if solid_count == 0 and shell_count > 0:
@@ -125,14 +128,18 @@ def analyze_shape(
         )
         pierce_estimate = count_edge_components(classification.cut_edges)
         cut_length_mm = classification.cut_length_mm
-        pierce_count = pierce_estimate.pierce_count
+        pierce_count = classification.pierce_count
+        if pierce_count is None:
+            pierce_count = pierce_estimate.pierce_count
         cut_edge_count = classification.cut_edge_count
         outer_face_count = classification.outer_face_count
+        wall_thickness_mm = classification.wall_thickness_mm
         warnings.extend(classification.warnings)
-        warnings.extend(pierce_estimate.warnings)
+        if classification.pierce_count is None:
+            warnings.extend(pierce_estimate.warnings)
         if cut_length_mm > 0.0:
             warnings.append(
-                "Длина реза рассчитана предварительно по ребрам наружной поверхности; "
+                "Длина реза рассчитана предварительно по геометрии модели; "
                 "проверьте результат через DEV-скрипт."
             )
 
@@ -150,6 +157,7 @@ def analyze_shape(
         edge_count=int(summary.edge_count),
         solid_count=solid_count,
         shell_count=shell_count,
+        wall_thickness_mm=wall_thickness_mm,
         cut_length_mm=cut_length_mm,
         pierce_count=pierce_count,
         cut_edge_count=cut_edge_count,

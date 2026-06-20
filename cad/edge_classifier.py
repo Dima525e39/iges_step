@@ -79,10 +79,24 @@ class EdgeRecord:
 
 
 @dataclass(slots=True)
+class ThicknessFaceRecord:
+    face: FaceRecord
+    area_mm2: float
+    thickness_mm: float
+    cut_length_mm: float
+    edges: tuple[EdgeRecord, ...]
+    reason: str = ""
+
+
+@dataclass(slots=True)
 class EdgeClassificationResult:
     cut_edges: tuple[EdgeRecord, ...]
     all_edge_count: int
     outer_face_count: int
+    thickness_faces: tuple[ThicknessFaceRecord, ...] = ()
+    wall_thickness_mm: float = 0.0
+    cut_length_override_mm: float | None = None
+    pierce_count_override: int | None = None
     warnings: tuple[str, ...] = ()
 
     @property
@@ -91,7 +105,17 @@ class EdgeClassificationResult:
 
     @property
     def cut_length_mm(self) -> float:
+        if self.cut_length_override_mm is not None:
+            return self.cut_length_override_mm
         return sum(edge.length_mm for edge in self.cut_edges)
+
+    @property
+    def thickness_face_count(self) -> int:
+        return len(self.thickness_faces)
+
+    @property
+    def pierce_count(self) -> int | None:
+        return self.pierce_count_override
 
 
 class EdgeClassifier:
@@ -142,6 +166,14 @@ def classify_cut_edges(
         tolerance=tolerance,
         warnings=warnings,
     )
+    thickness_faces = _collect_thickness_face_records(
+        face_records,
+        edge_records,
+        axis=axis,
+        length_mm=length_mm,
+        tolerance=tolerance,
+        warnings=warnings,
+    )
 
     outer_face_count = sum(1 for face in face_records if face.is_outer_longitudinal)
     if outer_face_count == 0:
@@ -161,13 +193,36 @@ def classify_cut_edges(
         )
     )
 
-    if not cut_edges:
+    if not cut_edges and not thickness_faces:
         warnings.append("Кандидаты реза не найдены. Нужна проверка через DEV-скрипт.")
+
+    cut_length_override_mm = None
+    pierce_count_override = None
+    wall_thickness_mm = _median(
+        tuple(face.thickness_mm for face in thickness_faces if face.thickness_mm > tolerance)
+    )
+    if thickness_faces:
+        if wall_thickness_mm > tolerance:
+            for face in thickness_faces:
+                face.thickness_mm = wall_thickness_mm
+                face.cut_length_mm = face.area_mm2 / wall_thickness_mm
+        cut_length_override_mm = sum(face.cut_length_mm for face in thickness_faces)
+        pierce_count_override = _count_thickness_face_components(
+            thickness_faces,
+            tolerance=tolerance,
+        )
+        warnings.append(
+            "Длина реза рассчитана по граням в толщине изделия; это экспериментальный метод v0.4.3."
+        )
 
     return EdgeClassificationResult(
         cut_edges=cut_edges,
         all_edge_count=len(edge_records),
         outer_face_count=outer_face_count,
+        thickness_faces=thickness_faces,
+        wall_thickness_mm=wall_thickness_mm,
+        cut_length_override_mm=cut_length_override_mm,
+        pierce_count_override=pierce_count_override,
         warnings=tuple(warnings),
     )
 
@@ -242,6 +297,186 @@ def _collect_edge_records(
             record = _get_or_create_edge_record(records, edge, warnings)
             _append_unique_face(record, face_record)
     return records
+
+
+def _collect_thickness_face_records(
+    face_records: Iterable[FaceRecord],
+    edge_records: Iterable[EdgeRecord],
+    *,
+    axis: str,
+    length_mm: float,
+    tolerance: float,
+    warnings: list[str],
+) -> tuple[ThicknessFaceRecord, ...]:
+    records: list[ThicknessFaceRecord] = []
+    for face_record in face_records:
+        face_edges = tuple(
+            edge for edge in edge_records if _edge_has_face(edge, face_record)
+        )
+        if not _is_thickness_face_candidate(
+            face_record,
+            face_edges,
+            axis=axis,
+            length_mm=length_mm,
+            tolerance=tolerance,
+        ):
+            continue
+
+        area_mm2 = _face_area(face_record.face, warnings)
+        if area_mm2 <= tolerance:
+            continue
+
+        edge_lengths = tuple(
+            edge.length_mm for edge in face_edges if edge.length_mm > tolerance
+        )
+        thickness_mm = _estimate_face_thickness(
+            face_record.bounds,
+            edge_lengths,
+            tolerance=tolerance,
+        )
+        if thickness_mm <= tolerance:
+            continue
+
+        cut_length_mm = area_mm2 / thickness_mm
+        if cut_length_mm <= tolerance:
+            continue
+
+        records.append(
+            ThicknessFaceRecord(
+                face=face_record,
+                area_mm2=area_mm2,
+                thickness_mm=thickness_mm,
+                cut_length_mm=cut_length_mm,
+                edges=face_edges,
+                reason="touches outer face through material thickness",
+            )
+        )
+    return tuple(records)
+
+
+def _is_thickness_face_candidate(
+    face_record: FaceRecord,
+    face_edges: tuple[EdgeRecord, ...],
+    *,
+    axis: str,
+    length_mm: float,
+    tolerance: float,
+) -> bool:
+    if face_record.is_outer_longitudinal:
+        return False
+    if not face_edges:
+        return False
+    if _looks_like_longitudinal_inner_wall(
+        face_record.bounds,
+        axis=axis,
+        length_mm=length_mm,
+        tolerance=tolerance,
+    ):
+        return False
+    return any(_edge_touches_outer_face(edge, face_record) for edge in face_edges)
+
+
+def _edge_has_face(edge: EdgeRecord, face_record: FaceRecord) -> bool:
+    return any(_is_same_shape(face.face, face_record.face) for face in edge.faces)
+
+
+def _edge_touches_outer_face(edge: EdgeRecord, face_record: FaceRecord) -> bool:
+    return any(
+        not _is_same_shape(face.face, face_record.face) and face.is_outer_longitudinal
+        for face in edge.faces
+    )
+
+
+def _looks_like_longitudinal_inner_wall(
+    bounds: Bounds,
+    *,
+    axis: str,
+    length_mm: float,
+    tolerance: float,
+) -> bool:
+    if length_mm <= 0:
+        return False
+    axis_size = bounds.sizes[AXIS_INDEX[axis]]
+    return axis_size >= max(length_mm * 0.65, tolerance)
+
+
+def _estimate_face_thickness(
+    bounds: Bounds,
+    edge_lengths: tuple[float, ...],
+    *,
+    tolerance: float,
+) -> float:
+    lengths = sorted(length for length in edge_lengths if length > tolerance)
+    if lengths:
+        index = min(len(lengths) - 1, max(0, len(lengths) // 4))
+        return lengths[index]
+
+    non_zero_sizes = sorted(size for size in bounds.sizes if size > tolerance)
+    if non_zero_sizes:
+        return non_zero_sizes[0]
+    return 0.0
+
+
+def _count_thickness_face_components(
+    records: tuple[ThicknessFaceRecord, ...],
+    *,
+    tolerance: float,
+) -> int:
+    if not records:
+        return 0
+
+    parent = list(range(len(records)))
+
+    def find(index: int) -> int:
+        while parent[index] != index:
+            parent[index] = parent[parent[index]]
+            index = parent[index]
+        return index
+
+    def union(first: int, second: int) -> None:
+        first_root = find(first)
+        second_root = find(second)
+        if first_root != second_root:
+            parent[second_root] = first_root
+
+    for left_index, left in enumerate(records):
+        for right_index in range(left_index + 1, len(records)):
+            if _thickness_faces_touch(left, records[right_index], tolerance=tolerance):
+                union(left_index, right_index)
+
+    return len({find(index) for index in range(len(records))})
+
+
+def _thickness_faces_touch(
+    first: ThicknessFaceRecord,
+    second: ThicknessFaceRecord,
+    *,
+    tolerance: float,
+) -> bool:
+    for first_edge in first.edges:
+        for second_edge in second.edges:
+            if _is_same_shape(first_edge.edge, second_edge.edge):
+                return True
+            if _edge_endpoints_touch(first_edge, second_edge, tolerance=tolerance):
+                return True
+    return False
+
+
+def _edge_endpoints_touch(
+    first: EdgeRecord,
+    second: EdgeRecord,
+    *,
+    tolerance: float,
+) -> bool:
+    first_points = (first.start_point, first.end_point)
+    second_points = (second.start_point, second.end_point)
+    return any(
+        first_point is not None
+        and second_point is not None
+        and _points_are_close(first_point, second_point, tolerance=tolerance)
+        for first_point in first_points
+        for second_point in second_points
+    )
 
 
 def _collect_wire_records(
@@ -468,6 +703,18 @@ def _edge_length(edge: object, warnings: list[str]) -> float:
         return 0.0
 
 
+def _face_area(face: object, warnings: list[str]) -> float:
+    try:
+        from OCC.Core.GProp import GProp_GProps
+
+        props = GProp_GProps()
+        _surface_properties(face, props)
+        return float(props.Mass())
+    except Exception as exc:
+        warnings.append(f"Не удалось измерить площадь грани: {exc}")
+        return 0.0
+
+
 def _linear_properties(edge: object, props: object) -> None:
     import OCC.Core.BRepGProp as brep_gprop
 
@@ -485,6 +732,25 @@ def _linear_properties(edge: object, props: object) -> None:
         return
 
     raise AttributeError("BRepGProp LinearProperties не найден.")
+
+
+def _surface_properties(face: object, props: object) -> None:
+    import OCC.Core.BRepGProp as brep_gprop
+
+    brepgprop = getattr(brep_gprop, "brepgprop", None)
+    if brepgprop is not None:
+        for method_name in ("SurfaceProperties", "SurfaceProperties_s"):
+            method = getattr(brepgprop, method_name, None)
+            if method is not None:
+                method(face, props)
+                return
+
+    method = getattr(brep_gprop, "brepgprop_SurfaceProperties", None)
+    if method is not None:
+        method(face, props)
+        return
+
+    raise AttributeError("BRepGProp SurfaceProperties не найден.")
 
 
 def _edge_vertices(edge: object) -> tuple[object | None, object | None]:
@@ -556,6 +822,18 @@ def _is_same_shape(first: object, second: object) -> bool:
         return first is second
 
 
+def _points_are_close(
+    first: tuple[float, float, float],
+    second: tuple[float, float, float],
+    *,
+    tolerance: float,
+) -> bool:
+    return all(
+        abs(first_value - second_value) <= tolerance
+        for first_value, second_value in zip(first, second, strict=True)
+    )
+
+
 def _summary_axis_size(summary: ShapeSummary, axis: str) -> float:
     return {
         "X": float(summary.size_x_mm),
@@ -567,3 +845,13 @@ def _summary_axis_size(summary: ShapeSummary, axis: str) -> float:
 def _tolerance_from_summary(summary: ShapeSummary) -> float:
     largest = max(float(summary.size_x_mm), float(summary.size_y_mm), float(summary.size_z_mm), 1.0)
     return max(0.01, largest * 0.001)
+
+
+def _median(values: tuple[float, ...]) -> float:
+    if not values:
+        return 0.0
+    sorted_values = sorted(values)
+    middle = len(sorted_values) // 2
+    if len(sorted_values) % 2:
+        return sorted_values[middle]
+    return (sorted_values[middle - 1] + sorted_values[middle]) / 2.0

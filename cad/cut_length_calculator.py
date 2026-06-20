@@ -11,6 +11,8 @@ class CutLengthEstimate:
     cut_length_mm: float
     cut_edge_count: int
     outer_face_count: int
+    wall_thickness_mm: float = 0.0
+    thickness_face_count: int = 0
     warnings: tuple[str, ...] = ()
 
 
@@ -38,5 +40,7 @@ class CutLengthCalculator:
             cut_length_mm=classification.cut_length_mm,
             cut_edge_count=classification.cut_edge_count,
             outer_face_count=classification.outer_face_count,
+            wall_thickness_mm=classification.wall_thickness_mm,
+            thickness_face_count=classification.thickness_face_count,
             warnings=classification.warnings,
         )

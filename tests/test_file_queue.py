@@ -5,7 +5,16 @@ import types
 import unittest
 
 from cad.analyzer import GeometryAnalysisResult, analyze_shape
-from cad.edge_classifier import Bounds, EdgeRecord, FaceRecord, _is_cut_edge_candidate
+from cad.edge_classifier import (
+    Bounds,
+    EdgeRecord,
+    FaceRecord,
+    ThicknessFaceRecord,
+    _count_thickness_face_components,
+    _estimate_face_thickness,
+    _is_cut_edge_candidate,
+    _is_thickness_face_candidate,
+)
 from cad.importer import CadImportError, CadImporter
 from cad.pierce_counter import _count_components_from_pairs
 from cad.profile_detector import detect_profile_from_dimensions
@@ -289,6 +298,76 @@ class GeometryAnalyzerTests(unittest.TestCase):
                 has_outer_faces=True,
                 tolerance=0.01,
             )
+        )
+
+    def test_thickness_face_candidate_requires_outer_touch(self) -> None:
+        outer_face = FaceRecord(
+            face=object(),
+            bounds=Bounds(0.0, 0.0, 0.0, 80.0, 0.0, 1000.0),
+            is_outer_longitudinal=True,
+        )
+        thickness_face = FaceRecord(
+            face=object(),
+            bounds=Bounds(30.0, 0.0, 430.0, 50.0, 3.0, 470.0),
+            is_outer_longitudinal=False,
+        )
+        edge = EdgeRecord(
+            edge=object(),
+            length_mm=20.0,
+            bounds=Bounds(30.0, 0.0, 450.0, 50.0, 0.0, 450.0),
+            faces=[outer_face, thickness_face],
+        )
+
+        self.assertTrue(
+            _is_thickness_face_candidate(
+                thickness_face,
+                (edge,),
+                axis="Z",
+                length_mm=1000.0,
+                tolerance=0.01,
+            )
+        )
+
+    def test_estimate_face_thickness_uses_short_boundary_edges(self) -> None:
+        thickness = _estimate_face_thickness(
+            Bounds(0.0, 0.0, 0.0, 80.0, 40.0, 0.0),
+            (3.0, 3.0, 40.0, 40.0, 80.0, 80.0),
+            tolerance=0.01,
+        )
+
+        self.assertEqual(thickness, 3.0)
+
+    def test_thickness_face_components_group_touching_faces(self) -> None:
+        first_edge = EdgeRecord(
+            edge=object(),
+            length_mm=40.0,
+            start_point=(0.0, 0.0, 0.0),
+            end_point=(40.0, 0.0, 0.0),
+        )
+        second_edge = EdgeRecord(
+            edge=object(),
+            length_mm=30.0,
+            start_point=(40.0, 0.0, 0.005),
+            end_point=(40.0, 30.0, 0.0),
+        )
+        first_face = ThicknessFaceRecord(
+            face=FaceRecord(object(), Bounds(0.0, 0.0, 0.0, 40.0, 3.0, 3.0), False),
+            area_mm2=120.0,
+            thickness_mm=3.0,
+            cut_length_mm=40.0,
+            edges=(first_edge,),
+        )
+        second_face = ThicknessFaceRecord(
+            face=FaceRecord(object(), Bounds(40.0, 0.0, 0.0, 43.0, 30.0, 3.0), False),
+            area_mm2=90.0,
+            thickness_mm=3.0,
+            cut_length_mm=30.0,
+            edges=(second_edge,),
+        )
+
+        self.assertEqual(
+            _count_thickness_face_components((first_face, second_face), tolerance=0.01),
+            1,
         )
 
 
