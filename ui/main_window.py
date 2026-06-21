@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import asdict
 from pathlib import Path
 
 from PySide6.QtCore import QThread, Qt
@@ -27,7 +28,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app_info import APP_DESCRIPTION, APP_NAME, APP_VERSION
+from app_info import APP_NAME, APP_VERSION
 from cad.analyzer import GeometryAnalysisResult, analyze_shape
 from cad.shape_summary import ShapeSummary
 from core.file_job import (
@@ -39,14 +40,34 @@ from core.file_job import (
     STATUS_PENDING,
 )
 from core.file_queue import AddFilesResult, FileQueue
-from export.json_project import save_project
-from pricing.calculator import PricingInput, calculate_price
+from export.csv_exporter import export_jobs_to_csv
+from export.excel_exporter import export_excel_workbook
+from export.json_project import load_project, save_project
+from export.pdf_commercial_offer import export_commercial_offer_pdf
+from export.pdf_technical_report import export_technical_report_pdf
+from export.print_manager import print_html
+from export.report_html import calculation_table_html, commercial_offer_html, technical_report_html
+from pricing.price_selector import calculate_job_price
+from purchase.tube_grouping import number_from_text
+from purchase.tube_purchase_calculator import TubePurchaseRow, calculate_tube_purchase
+from settings.contractors_manager import default_contractor
+from settings.materials_manager import default_material
 from settings.settings_manager import SettingsManager
+from settings.tube_purchase_settings import TubePurchaseSettings
+from ui.commercial_offer_dialog import CommercialOfferDialog
+from ui.contractors_dialog import ContractorsDialog
 from ui.drop_helpers import local_paths_from_mime_data
 from ui.file_drop_area import FileDropArea
 from ui.file_list_widget import FileListWidget
 from ui.geometry_debug_dialog import GeometryDebugDialog
 from ui.import_worker import CadImportWorker
+from ui.materials_dialog import MaterialsDialog
+from ui.pricing_dialog import PricingDialog
+from ui.settings_dialog import GeneralSettingsDialog
+from ui.stock_purchase_widget import StockPurchaseWidget
+from ui.theme_manager import apply_theme
+from ui.top_menu import install_top_menu
+from ui.tube_purchase_settings_dialog import TubePurchaseSettingsDialog
 from ui.viewer_2d import Viewer2D
 from ui.viewer_3d import Viewer3D
 
@@ -59,6 +80,7 @@ class MainWindow(QMainWindow):
         self.imported_shapes: dict[str, object] = {}
         self.shape_summaries: dict[str, ShapeSummary] = {}
         self.shape_analyses: dict[str, GeometryAnalysisResult] = {}
+        self.purchase_rows: list[TubePurchaseRow] = []
         self.import_thread: QThread | None = None
         self.import_worker: CadImportWorker | None = None
         self.geometry_debug_dialog: GeometryDebugDialog | None = None
@@ -71,8 +93,9 @@ class MainWindow(QMainWindow):
         self.drop_root.setObjectName("DropRoot")
         self.setCentralWidget(self.drop_root)
 
+        install_top_menu(self)
         self._build_ui()
-        self._apply_styles()
+        self._apply_current_theme()
         self._connect_signals()
         self._refresh_jobs()
 
@@ -97,7 +120,7 @@ class MainWindow(QMainWindow):
         content_splitter.setChildrenCollapsible(False)
 
         bottom_panel = self._build_bottom_panel()
-        bottom_panel.setMinimumHeight(160)
+        bottom_panel.setMinimumHeight(84)
 
         self.vertical_splitter = QSplitter(Qt.Orientation.Vertical)
         self.vertical_splitter.addWidget(content_splitter)
@@ -105,7 +128,7 @@ class MainWindow(QMainWindow):
         self.vertical_splitter.setStretchFactor(0, 3)
         self.vertical_splitter.setStretchFactor(1, 1)
         self.vertical_splitter.setChildrenCollapsible(False)
-        self.vertical_splitter.setSizes([560, 220])
+        self.vertical_splitter.setSizes([640, 96])
         root_layout.addWidget(self.vertical_splitter, stretch=1)
 
     def _build_left_panel(self) -> QWidget:
@@ -144,13 +167,15 @@ class MainWindow(QMainWindow):
         self.tabs = QTabWidget()
         self.viewer_3d = Viewer3D()
         self.viewer_2d = Viewer2D()
-        self.calculation_placeholder = QLabel("Расчет не выполнен")
-        self.calculation_placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.calculation_placeholder.setWordWrap(True)
+        self.file_table = FileListWidget()
+        self.diagnostic_table = FileListWidget(diagnostic=True)
+        self.stock_purchase_widget = StockPurchaseWidget()
 
         self.tabs.addTab(self.viewer_3d, "3D-модель")
         self.tabs.addTab(self.viewer_2d, "2D-развертка")
-        self.tabs.addTab(self.calculation_placeholder, "Таблица расчета")
+        self.tabs.addTab(self.file_table, "Таблица расчета")
+        self.tabs.addTab(self.stock_purchase_widget, "Закупка трубы")
+        self.tabs.addTab(self.diagnostic_table, "Диагностика")
         layout.addWidget(self.tabs)
         return panel
 
@@ -187,6 +212,9 @@ class MainWindow(QMainWindow):
         self.param_ignored_plane_radius = QLabel("—")
         self.param_auxiliary_unfold = QLabel("—")
         self.param_debug_edges = QLabel("—")
+        self.param_material = QLabel("—")
+        self.param_contractor = QLabel("—")
+        self.param_price_rule = QLabel("—")
         self.param_price = QLabel("—")
         params_layout.addRow("Файл", self.param_name)
         params_layout.addRow("Статус", self.param_status)
@@ -204,6 +232,9 @@ class MainWindow(QMainWindow):
         params_layout.addRow("Игнор. плоскость/радиус", self.param_ignored_plane_radius)
         params_layout.addRow("Вспом. линии", self.param_auxiliary_unfold)
         params_layout.addRow("debug_edges.csv", self.param_debug_edges)
+        params_layout.addRow("Материал", self.param_material)
+        params_layout.addRow("Контрагент", self.param_contractor)
+        params_layout.addRow("Правило цены", self.param_price_rule)
         params_layout.addRow("Стоимость", self.param_price)
         layout.addWidget(params_group)
 
@@ -221,34 +252,12 @@ class MainWindow(QMainWindow):
         geometry_layout.addRow(self.debug_edges_checkbox)
         layout.addWidget(geometry_group)
 
-        settings_group = QGroupBox("Настройки цен")
-        settings_layout = QFormLayout(settings_group)
-        pricing = self.settings_manager.get("pricing", default={})
-        self.price_per_meter_input = self._make_money_input(
-            float(pricing.get("price_per_meter", 120.0))
-        )
-        self.price_per_pierce_input = self._make_money_input(
-            float(pricing.get("price_per_pierce", 15.0))
-        )
-        self.minimum_price_input = self._make_money_input(
-            float(pricing.get("minimum_price", 0.0))
-        )
-        self.setup_price_input = self._make_money_input(
-            float(pricing.get("setup_price", 0.0))
-        )
-        self.complexity_factor_input = self._make_factor_input(
-            float(pricing.get("complexity_factor", 1.0))
-        )
-        self.markup_percent_input = self._make_percent_input(
-            float(pricing.get("markup_percent", 0.0))
-        )
-        settings_layout.addRow("Цена за метр", self.price_per_meter_input)
-        settings_layout.addRow("Цена за врезку", self.price_per_pierce_input)
-        settings_layout.addRow("Минимум", self.minimum_price_input)
-        settings_layout.addRow("Подготовка", self.setup_price_input)
-        settings_layout.addRow("Сложность", self.complexity_factor_input)
-        settings_layout.addRow("Наценка, %", self.markup_percent_input)
-        layout.addWidget(settings_group)
+        pricing_group = QGroupBox("Стоимость")
+        pricing_layout = QFormLayout(pricing_group)
+        self.pricing_hint_label = QLabel("Цены редактируются в меню Настройки / Цены.")
+        self.pricing_hint_label.setWordWrap(True)
+        pricing_layout.addRow(self.pricing_hint_label)
+        layout.addWidget(pricing_group)
 
         warnings_group = QGroupBox("Предупреждения")
         warnings_layout = QVBoxLayout(warnings_group)
@@ -292,24 +301,26 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(panel)
 
         actions = QHBoxLayout()
-        self.process_selected_button = QPushButton("Импортировать выбранный")
-        self.process_all_button = QPushButton("Импортировать все")
+        self.process_selected_button = QPushButton("Обработать выбранный")
+        self.process_all_button = QPushButton("Обработать все")
+        self.process_all_button.setObjectName("PrimaryButton")
         self.export_csv_button = QPushButton("Экспорт CSV")
-        self.export_pdf_button = QPushButton("Экспорт PDF")
+        self.export_excel_button = QPushButton("Экспорт Excel")
+        self.export_pdf_button = QPushButton("PDF КП")
         self.save_project_button = QPushButton("Сохранить проект")
-        self.export_csv_button.setEnabled(False)
-        self.export_pdf_button.setEnabled(False)
 
         actions.addWidget(self.process_selected_button)
         actions.addWidget(self.process_all_button)
         actions.addStretch(1)
         actions.addWidget(self.export_csv_button)
+        actions.addWidget(self.export_excel_button)
         actions.addWidget(self.export_pdf_button)
         actions.addWidget(self.save_project_button)
         layout.addLayout(actions)
 
-        self.file_table = FileListWidget()
-        layout.addWidget(self.file_table, stretch=1)
+        self.summary_label = QLabel("Файлов: 0 | Успешно: 0 | Ошибок: 0 | Итого: 0.00 руб.")
+        self.summary_label.setObjectName("SummaryLabel")
+        layout.addWidget(self.summary_label)
         return panel
 
     def _connect_signals(self) -> None:
@@ -320,9 +331,13 @@ class MainWindow(QMainWindow):
         self.process_selected_button.clicked.connect(self._process_selected)
         self.process_all_button.clicked.connect(self._process_all)
         self.save_project_button.clicked.connect(self._save_project)
+        self.export_csv_button.clicked.connect(self._export_csv)
+        self.export_excel_button.clicked.connect(self._export_excel)
+        self.export_pdf_button.clicked.connect(self._export_commercial_pdf)
         self.drop_area.pathsDropped.connect(self._add_paths)
         self.file_table.pathsDropped.connect(self._add_paths)
         self.file_table.itemSelectionChanged.connect(self._sync_from_table_selection)
+        self.diagnostic_table.itemSelectionChanged.connect(self._sync_from_diagnostic_selection)
         self.compact_list.currentRowChanged.connect(self._sync_from_compact_selection)
         self.geometry_debug_button.clicked.connect(self._open_geometry_debugger)
         self.manual_thickness_checkbox.toggled.connect(self.manual_thickness_input.setEnabled)
@@ -344,6 +359,7 @@ class MainWindow(QMainWindow):
 
     def _add_paths(self, paths: list[str]) -> None:
         result = self.queue.add_paths(paths)
+        self._apply_default_settings_to_jobs(result.added)
         self._refresh_jobs()
         self._show_add_result(result)
 
@@ -359,6 +375,15 @@ class MainWindow(QMainWindow):
         if messages:
             QMessageBox.warning(self, "Добавление файлов", "\n".join(messages[:20]))
 
+    def _apply_default_settings_to_jobs(self, jobs: list[FileJob]) -> None:
+        settings = self.settings_manager.as_dict()
+        contractor = default_contractor(settings)
+        material = default_material(settings)
+        for job in jobs:
+            job.contractor = contractor.name
+            job.currency = contractor.currency
+            job.material = material.name
+
     def _clear_jobs(self) -> None:
         if len(self.queue) == 0:
             return
@@ -366,6 +391,7 @@ class MainWindow(QMainWindow):
         self.imported_shapes.clear()
         self.shape_summaries.clear()
         self.shape_analyses.clear()
+        self.purchase_rows.clear()
         self._refresh_jobs()
 
     def _remove_selected_jobs(self) -> None:
@@ -404,8 +430,39 @@ class MainWindow(QMainWindow):
         )
         if not target_path:
             return
-        save_project(self.queue.jobs(), target_path)
+        save_project(
+            self.queue.jobs(),
+            target_path,
+            settings=self.settings_manager.as_dict(),
+            purchase_rows=[asdict(row) for row in self.purchase_rows],
+        )
         self.statusBar().showMessage(f"Проект сохранен: {Path(target_path).name}", 5000)
+
+    def _open_project(self) -> None:
+        source_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Открыть проект",
+            "",
+            "JSON (*.json)",
+        )
+        if not source_path:
+            return
+        try:
+            jobs, settings = load_project(source_path)
+        except Exception as exc:
+            QMessageBox.critical(self, "Открыть проект", f"Не удалось открыть проект:\n{exc}")
+            return
+        if settings:
+            for key, value in settings.items():
+                self.settings_manager.set(str(key), value=value)
+            self.settings_manager.save()
+            self._apply_current_theme()
+        self.queue.replace_jobs(jobs)
+        self.imported_shapes.clear()
+        self.shape_summaries.clear()
+        self.shape_analyses.clear()
+        self._refresh_jobs()
+        self.statusBar().showMessage(f"Проект открыт: {Path(source_path).name}", 5000)
 
     def _start_import(self, paths: list[str]) -> None:
         if self.import_thread is not None:
@@ -420,6 +477,7 @@ class MainWindow(QMainWindow):
         for job in import_jobs:
             job.status = STATUS_IMPORTING
             job.tube_type = PLACEHOLDER
+            job.tube_size = PLACEHOLDER
             job.tube_length_mm = PLACEHOLDER
             job.wall_thickness_mm = PLACEHOLDER
             job.wall_thickness_method = PLACEHOLDER
@@ -434,6 +492,7 @@ class MainWindow(QMainWindow):
             job.auxiliary_unfold_edges = PLACEHOLDER
             job.debug_edges_path = ""
             job.price = PLACEHOLDER
+            job.price_warning = ""
             job.error_text = ""
             job.warnings.clear()
             self.imported_shapes.pop(job.normalized_path, None)
@@ -486,6 +545,7 @@ class MainWindow(QMainWindow):
 
         job.status = STATUS_IMPORTED
         job.tube_type = getattr(geometry_analysis, "profile_hint", str(file_format))
+        job.tube_size = self._format_tube_size(geometry_analysis)
         job.tube_length_mm = self._format_analysis_length(geometry_analysis)
         job.wall_thickness_mm = self._format_wall_thickness(geometry_analysis)
         job.wall_thickness_method = str(
@@ -521,12 +581,13 @@ class MainWindow(QMainWindow):
             "auxiliary_unfold_edge_count",
         )
         job.debug_edges_path = str(getattr(geometry_analysis, "debug_edges_path", "") or "")
-        job.price = self._format_price(geometry_analysis)
+        self._update_job_price(job, geometry_analysis)
         job.error_text = ""
         job.warnings = [
             self._format_analysis_summary(geometry_analysis),
-            "Длина реза и врезки рассчитаны предварительно; проверяйте спорные модели через DEV-скрипт.",
         ]
+        if job.price_warning:
+            job.warnings.append(job.price_warning)
         analysis_warnings = getattr(geometry_analysis, "warnings", ())
         job.warnings.extend(str(warning) for warning in analysis_warnings)
 
@@ -583,6 +644,41 @@ class MainWindow(QMainWindow):
             f"{getattr(analysis, 'length_mm', 0.0):.1f} мм "
             f"({getattr(analysis, 'length_axis', '—')})"
         )
+
+    def _format_tube_size(self, analysis: object) -> str:
+        width = float(getattr(analysis, "width_mm", 0.0) or 0.0)
+        height = float(getattr(analysis, "height_mm", 0.0) or 0.0)
+        thickness = float(getattr(analysis, "wall_thickness_mm", 0.0) or 0.0)
+        profile = str(getattr(analysis, "profile_hint", "") or "").lower()
+        if width <= 0.0 or height <= 0.0:
+            return PLACEHOLDER
+        if "круг" in profile or abs(width - height) <= 0.2:
+            base = f"Ø{width:.1f}"
+        else:
+            base = f"{width:.1f}×{height:.1f}"
+        if thickness > 0.0:
+            return f"{base}×{thickness:.1f}"
+        return base
+
+    def _update_job_price(self, job: FileJob, analysis: object) -> None:
+        cut_length = float(getattr(analysis, "cut_length_mm", 0.0) or 0.0)
+        pierce_count = int(getattr(analysis, "pierce_count", 0) or 0)
+        thickness = float(getattr(analysis, "wall_thickness_mm", 0.0) or 0.0)
+        if cut_length <= 0.0 and pierce_count <= 0:
+            job.price = PLACEHOLDER
+            job.price_warning = ""
+            return
+        result = calculate_job_price(
+            self.settings_manager.as_dict(),
+            contractor=job.contractor,
+            material=job.material,
+            thickness_mm=thickness,
+            cut_length_mm=cut_length,
+            pierce_count=pierce_count,
+        )
+        job.price = f"{result.total:.2f}"
+        job.currency = result.currency
+        job.price_warning = result.selection.warning
 
     def _format_analysis_summary(self, analysis: object) -> str:
         return (
@@ -648,19 +744,18 @@ class MainWindow(QMainWindow):
         pierce_count = int(getattr(analysis, "pierce_count", 0))
         if cut_length <= 0.0 and pierce_count <= 0:
             return PLACEHOLDER
-        price = calculate_price(
-            PricingInput(
-                cut_length_mm=cut_length,
-                pierce_count=pierce_count,
-                price_per_meter=self.price_per_meter_input.value(),
-                price_per_pierce=self.price_per_pierce_input.value(),
-                setup_price=self.setup_price_input.value(),
-                minimum_price=self.minimum_price_input.value(),
-                complexity_factor=self.complexity_factor_input.value(),
-                markup_percent=self.markup_percent_input.value(),
-            )
+        settings = self.settings_manager.as_dict()
+        contractor = default_contractor(settings)
+        material = default_material(settings)
+        result = calculate_job_price(
+            settings,
+            contractor=contractor.name,
+            material=material.name,
+            thickness_mm=float(getattr(analysis, "wall_thickness_mm", 0.0) or 0.0),
+            cut_length_mm=cut_length,
+            pierce_count=pierce_count,
         )
-        return f"{price:.2f}"
+        return f"{result.total:.2f} {result.currency}"
 
     def _format_shape_summary(self, summary: object) -> str:
         return (
@@ -675,8 +770,34 @@ class MainWindow(QMainWindow):
     def _refresh_jobs(self) -> None:
         jobs = self.queue.jobs()
         self.file_table.set_jobs(jobs)
+        self.diagnostic_table.set_jobs(jobs)
         self._refresh_compact_list(jobs)
+        self._refresh_purchase()
+        self._refresh_summary()
         self._show_selected_job(self._current_job())
+
+    def _refresh_purchase(self) -> None:
+        self.purchase_rows = calculate_tube_purchase(
+            self.queue.jobs(),
+            self.settings_manager.as_dict(),
+        )
+        self.stock_purchase_widget.set_rows(
+            self.purchase_rows,
+            purchase_settings=TubePurchaseSettings.from_settings(
+                self.settings_manager.as_dict()
+            ),
+        )
+
+    def _refresh_summary(self) -> None:
+        jobs = self.queue.jobs()
+        imported = sum(1 for job in jobs if job.status == STATUS_IMPORTED)
+        failed = sum(1 for job in jobs if job.status == STATUS_ERROR)
+        total = sum(number_from_text(job.price) for job in jobs)
+        currency = next((job.currency for job in jobs if job.currency), "руб.")
+        self.summary_label.setText(
+            f"Файлов: {len(jobs)} | Успешно: {imported} | Ошибок: {failed} | "
+            f"Итого: {total:.2f} {currency}"
+        )
 
     def _refresh_compact_list(self, jobs: list[FileJob]) -> None:
         current_path = None
@@ -700,6 +821,20 @@ class MainWindow(QMainWindow):
             self.compact_list.blockSignals(True)
             self._select_compact_path(selected[0])
             self.compact_list.blockSignals(False)
+            self.diagnostic_table.blockSignals(True)
+            self.diagnostic_table.select_path(selected[0])
+            self.diagnostic_table.blockSignals(False)
+        self._show_selected_job(self._current_job())
+
+    def _sync_from_diagnostic_selection(self) -> None:
+        selected = self.diagnostic_table.selected_paths()
+        if selected:
+            self.compact_list.blockSignals(True)
+            self._select_compact_path(selected[0])
+            self.compact_list.blockSignals(False)
+            self.file_table.blockSignals(True)
+            self.file_table.select_path(selected[0])
+            self.file_table.blockSignals(False)
         self._show_selected_job(self._current_job())
 
     def _sync_from_compact_selection(self, row: int) -> None:
@@ -710,6 +845,9 @@ class MainWindow(QMainWindow):
         self.file_table.blockSignals(True)
         self.file_table.select_path(path)
         self.file_table.blockSignals(False)
+        self.diagnostic_table.blockSignals(True)
+        self.diagnostic_table.select_path(path)
+        self.diagnostic_table.blockSignals(False)
         self._show_selected_job(self.queue.get(path))
 
     def _select_compact_path(self, path: str) -> None:
@@ -735,9 +873,15 @@ class MainWindow(QMainWindow):
         analysis = self.shape_analyses.get(job.normalized_path) if job is not None else None
         if shape is None:
             self.viewer_3d.show_job(job)
+            self.viewer_2d.show_job(job)
         else:
             self.viewer_3d.show_shape(shape, job.name)
-        self.viewer_2d.show_job(job)
+            self.viewer_2d.show_unfolding(
+                job,
+                shape=shape,
+                summary=summary,
+                analysis=analysis,
+            )
         self.geometry_debug_button.setEnabled(shape is not None)
         if self.geometry_debug_dialog is not None:
             self.geometry_debug_dialog.set_context(
@@ -748,7 +892,7 @@ class MainWindow(QMainWindow):
             )
 
         if job is None:
-            values = ["—"] * 17
+            values = ["—"] * 20
             warnings = "—"
         else:
             values = [
@@ -768,7 +912,10 @@ class MainWindow(QMainWindow):
                 job.ignored_plane_radius_edges,
                 job.auxiliary_unfold_edges,
                 job.debug_edges_path or "—",
-                job.price,
+                job.material,
+                job.contractor,
+                job.price_warning or "точное/дефолтное правило",
+                job.formatted_price,
             ]
             warnings = "\n".join(job.warnings) if job.warnings else "—"
 
@@ -789,6 +936,9 @@ class MainWindow(QMainWindow):
             self.param_ignored_plane_radius,
             self.param_auxiliary_unfold,
             self.param_debug_edges,
+            self.param_material,
+            self.param_contractor,
+            self.param_price_rule,
             self.param_price,
         ]
         for label, value in zip(labels, values, strict=True):
@@ -848,6 +998,168 @@ class MainWindow(QMainWindow):
     def _on_geometry_debugger_closed(self, *_args: object) -> None:
         self.geometry_debug_dialog = None
 
+    def _open_contractors_settings(self) -> None:
+        if ContractorsDialog(self.settings_manager, self).exec():
+            self._settings_changed()
+
+    def _open_materials_settings(self) -> None:
+        if MaterialsDialog(self.settings_manager, self).exec():
+            self._settings_changed()
+
+    def _open_pricing_settings(self) -> None:
+        if PricingDialog(self.settings_manager, self).exec():
+            self._settings_changed()
+
+    def _open_purchase_settings(self) -> None:
+        if TubePurchaseSettingsDialog(self.settings_manager, self).exec():
+            self._settings_changed()
+
+    def _open_general_settings(self) -> None:
+        if GeneralSettingsDialog(self.settings_manager, self).exec():
+            self._settings_changed()
+
+    def _open_offer_settings(self) -> None:
+        CommercialOfferDialog(self.settings_manager, self).exec()
+
+    def _choose_logo(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Выбрать логотип",
+            "",
+            "Изображения (*.png *.jpg *.jpeg)",
+        )
+        if not path:
+            return
+        self.settings_manager.set("logo", value={"path": path})
+        self.settings_manager.save()
+        self.statusBar().showMessage(f"Логотип выбран: {Path(path).name}", 5000)
+
+    def _settings_changed(self) -> None:
+        self._apply_current_theme()
+        self._apply_default_settings_to_jobs(self.queue.jobs())
+        for job in self.queue.jobs():
+            analysis = self.shape_analyses.get(job.normalized_path)
+            if analysis is not None:
+                old_warning = job.price_warning
+                if old_warning:
+                    job.warnings = [warning for warning in job.warnings if warning != old_warning]
+                self._update_job_price(job, analysis)
+                if job.price_warning and job.price_warning not in job.warnings:
+                    job.warnings.append(job.price_warning)
+        self._refresh_jobs()
+
+    def _export_csv(self) -> None:
+        if not self._ensure_has_jobs():
+            return
+        target_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Экспорт CSV",
+            "TubeCutCalculator-calculation.csv",
+            "CSV (*.csv)",
+        )
+        if not target_path:
+            return
+        export_jobs_to_csv(self.queue.jobs(), target_path)
+        self.statusBar().showMessage(f"CSV сохранен: {Path(target_path).name}", 5000)
+
+    def _export_excel(self) -> None:
+        if not self._ensure_has_jobs():
+            return
+        target_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Экспорт Excel",
+            "TubeCutCalculator-calculation.xlsx",
+            "Excel (*.xlsx)",
+        )
+        if not target_path:
+            return
+        self._refresh_purchase()
+        export_excel_workbook(
+            self.queue.jobs(),
+            self.purchase_rows,
+            self.settings_manager.as_dict(),
+            target_path,
+        )
+        self.statusBar().showMessage(f"Excel сохранен: {Path(target_path).name}", 5000)
+
+    def _export_commercial_pdf(self) -> None:
+        if not self._ensure_has_jobs():
+            return
+        target_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "PDF — коммерческое предложение",
+            "TubeCutCalculator-offer.pdf",
+            "PDF (*.pdf)",
+        )
+        if not target_path:
+            return
+        self._refresh_purchase()
+        export_commercial_offer_pdf(
+            self.queue.jobs(),
+            self.purchase_rows,
+            self.settings_manager.as_dict(),
+            target_path,
+        )
+        self.statusBar().showMessage(f"PDF КП сохранен: {Path(target_path).name}", 5000)
+
+    def _export_technical_pdf(self) -> None:
+        if not self._ensure_has_jobs():
+            return
+        target_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "PDF — технический отчет",
+            "TubeCutCalculator-technical-report.pdf",
+            "PDF (*.pdf)",
+        )
+        if not target_path:
+            return
+        self._refresh_purchase()
+        export_technical_report_pdf(
+            self.queue.jobs(),
+            self.purchase_rows,
+            self.settings_manager.as_dict(),
+            target_path,
+        )
+        self.statusBar().showMessage(f"PDF техотчет сохранен: {Path(target_path).name}", 5000)
+
+    def _print_current_table(self) -> None:
+        if self._ensure_has_jobs():
+            print_html(self, calculation_table_html(self.queue.jobs()))
+
+    def _print_commercial_offer(self) -> None:
+        if self._ensure_has_jobs():
+            self._refresh_purchase()
+            print_html(
+                self,
+                commercial_offer_html(
+                    self.queue.jobs(),
+                    self.purchase_rows,
+                    self.settings_manager.as_dict(),
+                ),
+            )
+
+    def _print_technical_report(self) -> None:
+        if self._ensure_has_jobs():
+            self._refresh_purchase()
+            print_html(
+                self,
+                technical_report_html(
+                    self.queue.jobs(),
+                    self.purchase_rows,
+                    self.settings_manager.as_dict(),
+                ),
+            )
+
+    def _preview_print(self) -> None:
+        if self._ensure_has_jobs():
+            print_html(self, calculation_table_html(self.queue.jobs()), preview=True)
+
+    def _ensure_has_jobs(self) -> bool:
+        if len(self.queue) == 0:
+            QMessageBox.information(self, "Экспорт", "Список файлов пуст.")
+            return False
+        return True
+
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
         if local_paths_from_mime_data(event.mimeData()):
             self._set_drop_active(True)
@@ -879,61 +1191,6 @@ class MainWindow(QMainWindow):
         self.drop_root.style().unpolish(self.drop_root)
         self.drop_root.style().polish(self.drop_root)
 
-    def _apply_styles(self) -> None:
-        self.setStyleSheet(
-            """
-            QMainWindow {
-                background: #f5f7fb;
-            }
-            #DropRoot {
-                background: #f5f7fb;
-                border: 2px solid transparent;
-            }
-            #DropRoot[dropActive="true"] {
-                border: 2px solid #2f80ed;
-                background: #eef5ff;
-            }
-            #HeaderLabel {
-                font-size: 18px;
-                font-weight: 700;
-                color: #1f2937;
-            }
-            #SectionLabel {
-                font-weight: 600;
-                color: #374151;
-            }
-            #FileDropArea {
-                border: 2px dashed #9ca3af;
-                border-radius: 6px;
-                background: #ffffff;
-                color: #4b5563;
-            }
-            #FileDropArea[dropActive="true"],
-            #FileListWidget[dropActive="true"] {
-                border: 2px solid #2f80ed;
-                background: #eef5ff;
-            }
-            QGroupBox {
-                border: 1px solid #d1d5db;
-                border-radius: 6px;
-                margin-top: 10px;
-                padding-top: 10px;
-                background: #ffffff;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                left: 8px;
-                padding: 0 4px;
-                color: #374151;
-                font-weight: 600;
-            }
-            QPushButton {
-                min-height: 30px;
-                padding: 4px 10px;
-            }
-            QTableWidget, QListWidget, QTabWidget::pane {
-                background: #ffffff;
-                border: 1px solid #d1d5db;
-            }
-            """
-        )
+    def _apply_current_theme(self) -> None:
+        theme = str(self.settings_manager.get("ui", "theme", default="light") or "light")
+        apply_theme(self, theme)

@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QDragEnterEvent, QDragLeaveEvent, QDragMoveEvent, QDropEvent
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QAbstractItemView, QHeaderView, QTableWidget, QTableWidgetItem
 
-from core.file_job import FileJob
+from core.file_job import STATUS_ERROR, STATUS_IMPORTED, STATUS_IMPORTING, STATUS_PENDING, FileJob
 from ui.drop_helpers import local_paths_from_mime_data
 
 
@@ -12,10 +13,25 @@ class FileListWidget(QTableWidget):
     pathsDropped = Signal(list)
 
     HEADERS = [
-        "Имя файла",
+        "Файл",
+        "Размер / толщина",
+        "Длина",
+        "Длина реза",
+        "Врезки",
+        "Цена",
+        "Материал",
+        "Контрагент",
+        "Статус",
+        "Ошибка",
+        "Предупреждения",
+    ]
+
+    DIAGNOSTIC_HEADERS = [
+        "Файл",
         "Путь",
         "Статус",
         "Тип трубы",
+        "Размер / толщина",
         "Длина",
         "Толщина",
         "Метод толщины",
@@ -28,17 +44,19 @@ class FileListWidget(QTableWidget):
         "Игнор. продольные",
         "Игнор. плоскость/радиус",
         "Вспом. линии",
-        "Стоимость",
+        "Цена",
         "debug_edges.csv",
         "Ошибка",
     ]
 
-    def __init__(self, parent=None) -> None:
+    def __init__(self, parent=None, *, diagnostic: bool = False) -> None:
         super().__init__(parent)
+        self.diagnostic = diagnostic
         self.setAcceptDrops(True)
         self.setObjectName("FileListWidget")
-        self.setColumnCount(len(self.HEADERS))
-        self.setHorizontalHeaderLabels(self.HEADERS)
+        headers = self.DIAGNOSTIC_HEADERS if diagnostic else self.HEADERS
+        self.setColumnCount(len(headers))
+        self.setHorizontalHeaderLabels(headers)
         self.setAlternatingRowColors(True)
         self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
@@ -52,13 +70,18 @@ class FileListWidget(QTableWidget):
         self.setRowCount(len(jobs))
 
         for row, job in enumerate(jobs):
-            for column, value in enumerate(job.to_table_row()):
+            values = job.to_diagnostic_row() if self.diagnostic else job.to_table_row()
+            for column, value in enumerate(values):
                 item = QTableWidgetItem(value)
                 item.setData(Qt.ItemDataRole.UserRole, job.normalized_path)
-                if column >= 4:
+                if column >= 2:
                     item.setTextAlignment(
                         Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter
                     )
+                color = _row_color(job)
+                if color is not None:
+                    item.setBackground(color)
+                    item.setForeground(QColor("#111827"))
                 self.setItem(row, column, item)
 
             if job.normalized_path in selected_paths:
@@ -112,3 +135,17 @@ class FileListWidget(QTableWidget):
         self.setProperty("dropActive", active)
         self.style().unpolish(self)
         self.style().polish(self)
+
+
+def _row_color(job: FileJob) -> QColor | None:
+    if job.status == STATUS_PENDING:
+        return QColor("#f1f5f9")
+    if job.status == STATUS_IMPORTING:
+        return QColor("#dbeafe")
+    if job.status == STATUS_ERROR:
+        return QColor("#fee2e2")
+    if job.status == STATUS_IMPORTED and job.warnings:
+        return QColor("#fef3c7")
+    if job.status == STATUS_IMPORTED:
+        return QColor("#ecfdf5")
+    return None

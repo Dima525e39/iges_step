@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QCheckBox, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from core.file_job import FileJob
 
@@ -51,8 +51,37 @@ class Viewer3D(QWidget):
         self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.label.setWordWrap(True)
 
+        self.layers_panel = QWidget()
+        layers_layout = QHBoxLayout(self.layers_panel)
+        layers_layout.setContentsMargins(6, 4, 6, 4)
+        self.cut_lines_layer = QCheckBox("Линии реза")
+        self.cut_lines_layer.setChecked(True)
+        self.pierces_layer = QCheckBox("Врезки")
+        self.pierces_layer.setChecked(True)
+        self.ends_layer = QCheckBox("Торцы")
+        self.ends_layer.setChecked(True)
+        self.ignored_layer = QCheckBox("Игнорированные")
+        self.plane_radius_layer = QCheckBox("Плоскость/радиус")
+        self.uncertain_layer = QCheckBox("Спорные")
+        self.dimensions_layer = QCheckBox("Размеры")
+        self.cut_only_layer = QCheckBox("Только линии реза")
+        for checkbox in (
+            self.cut_lines_layer,
+            self.pierces_layer,
+            self.ends_layer,
+            self.ignored_layer,
+            self.plane_radius_layer,
+            self.uncertain_layer,
+            self.dimensions_layer,
+            self.cut_only_layer,
+        ):
+            layers_layout.addWidget(checkbox)
+        layers_layout.addStretch(1)
+        self.cut_only_layer.toggled.connect(self._toggle_cut_only_mode)
+
         self._layout = QVBoxLayout(self)
         self._layout.setContentsMargins(0, 0, 0, 0)
+        self._layout.addWidget(self.layers_panel)
         self._layout.addWidget(self.label)
 
     def show_job(self, job: FileJob | None) -> None:
@@ -179,3 +208,14 @@ class Viewer3D(QWidget):
             context.Deactivate()
         except Exception:
             pass
+
+    def _toggle_cut_only_mode(self, enabled: bool) -> None:
+        for checkbox in (
+            self.pierces_layer,
+            self.ends_layer,
+            self.ignored_layer,
+            self.plane_radius_layer,
+            self.uncertain_layer,
+            self.dimensions_layer,
+        ):
+            checkbox.setEnabled(not enabled)

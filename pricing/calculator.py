@@ -13,6 +13,7 @@ class PricingInput:
     minimum_price: float = 0.0
     complexity_factor: float = 1.0
     markup_percent: float = 0.0
+    contractor_markup_percent: float = 0.0
 
 
 def calculate_price(data: PricingInput) -> float:
@@ -21,5 +22,7 @@ def calculate_price(data: PricingInput) -> float:
         + data.pierce_count * data.price_per_pierce
         + data.setup_price
     )
-    total = base * data.complexity_factor * (1 + data.markup_percent / 100)
+    total = base * data.complexity_factor
+    total *= 1 + data.markup_percent / 100
+    total *= 1 + data.contractor_markup_percent / 100
     return max(total, data.minimum_price)

@@ -18,9 +18,6 @@ def main() -> int:
 
     from ui.main_window import MainWindow
 
-    _install_wall_thickness_ui_patch(MainWindow)
-    _install_unfolding_viewer_patch(MainWindow)
-
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
     app.setApplicationVersion(APP_VERSION)
@@ -28,67 +25,6 @@ def main() -> int:
     window = MainWindow()
     window.show()
     return app.exec()
-
-
-def _install_wall_thickness_ui_patch(main_window_cls: type) -> None:
-    if hasattr(main_window_cls, "_format_wall_thickness"):
-        return
-
-    original_on_import_progress = main_window_cls._on_import_progress
-
-    def on_import_progress_with_wall_thickness(
-        self: object,
-        path: str,
-        result: object,
-        summary: object,
-        analysis: object,
-    ) -> None:
-        original_on_import_progress(self, path, result, summary, analysis)
-        job = self.queue.get(path)
-        if job is None:
-            return
-
-        thickness = float(getattr(analysis, "wall_thickness_mm", 0.0) or 0.0)
-        if thickness <= 0.0:
-            return
-
-        job.wall_thickness_mm = f"{thickness:.1f} мм"
-        self._refresh_jobs()
-
-    main_window_cls._on_import_progress = on_import_progress_with_wall_thickness
-
-
-def _install_unfolding_viewer_patch(main_window_cls: type) -> None:
-    if getattr(main_window_cls, "_unfolding_viewer_patch_installed", False):
-        return
-
-    original_show_selected_job = main_window_cls._show_selected_job
-
-    def show_selected_job_with_unfolding(self: object, job: object | None) -> None:
-        original_show_selected_job(self, job)
-        viewer = getattr(self, "viewer_2d", None)
-        if viewer is None or not hasattr(viewer, "show_unfolding"):
-            return
-        if job is None:
-            viewer.show_job(None)
-            return
-
-        normalized_path = getattr(job, "normalized_path", "")
-        shape = getattr(self, "imported_shapes", {}).get(normalized_path)
-        summary = getattr(self, "shape_summaries", {}).get(normalized_path)
-        analysis = getattr(self, "shape_analyses", {}).get(normalized_path)
-        if shape is None:
-            viewer.show_job(job)
-            return
-        viewer.show_unfolding(
-            job,
-            shape=shape,
-            summary=summary,
-            analysis=analysis,
-        )
-
-    main_window_cls._show_selected_job = show_selected_job_with_unfolding
-    main_window_cls._unfolding_viewer_patch_installed = True
 
 
 def _self_test_output_path(args: list[str]) -> Path | None:
@@ -112,6 +48,10 @@ def _run_import_self_test(output_path: Path | None) -> int:
         from PySide6.QtCore import qVersion
 
         record(f"PySide6 Qt {qVersion()}: OK")
+        from PySide6.QtPrintSupport import QPrinter
+
+        _ = QPrinter
+        record("PySide6 QtPrintSupport: OK")
 
         from OCC.Core.Bnd import Bnd_Box
         from OCC.Core.BRepAdaptor import BRepAdaptor_Surface
@@ -166,6 +106,11 @@ def _run_import_self_test(output_path: Path | None) -> int:
         from cad.profile_detector import detect_profile_from_dimensions
         from cad.shape_summary import _count_topology
         from cad.unfolder import TubeUnfolder, build_unfolding_preview_from_edges
+        from export.excel_exporter import export_excel_workbook
+        from export.pdf_commercial_offer import export_commercial_offer_pdf
+        from export.pdf_technical_report import export_technical_report_pdf
+        from pricing.price_selector import calculate_job_price
+        from purchase.tube_purchase_calculator import calculate_tube_purchase
 
         _count_topology(TopoDS_Shape(), TopAbs_FACE)
         record("shape summary topology helper: OK")
@@ -192,6 +137,15 @@ def _run_import_self_test(output_path: Path | None) -> int:
 
         _ = (TubeUnfolder, build_unfolding_preview_from_edges)
         record("unfolding preview helper: OK")
+
+        _ = (
+            export_excel_workbook,
+            export_commercial_offer_pdf,
+            export_technical_report_pdf,
+            calculate_job_price,
+            calculate_tube_purchase,
+        )
+        record("pricing/export/purchase helpers: OK")
     except Exception as exc:
         exit_code = 1
         record(f"FAILED: {exc.__class__.__name__}: {exc}")
