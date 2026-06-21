@@ -795,10 +795,21 @@ def _analyze_cut_faces(
     global_bounds: Bounds,
     tolerance: float,
 ) -> CutFaceAnalysis:
+    records = tuple(records)
+    # Connectivity is grouped over *all* thickness faces, not only the ones
+    # that carry an outer cut contour. A multi-plane cut (e.g. a 3-plane notch)
+    # can have an internal facet that never reaches the outer skin; that facet
+    # owns no outer edge, yet it is the only thing joining its two outer
+    # neighbours. Excluding it before grouping would split a single pierce into
+    # two. We therefore compute components first, then keep only the faces that
+    # actually contribute an outer cut edge.
+    component_ids = _thickness_face_component_ids(records, tolerance=tolerance)
+
     selected_records: list[ThicknessFaceRecord] = []
+    selected_components: list[int] = []
     record_edges: list[tuple[EdgeRecord, ...]] = []
 
-    for record in records:
+    for index, record in enumerate(records):
         outer_edges = _outer_cut_edges_for_thickness_face(
             record,
             axis=axis,
@@ -808,19 +819,16 @@ def _analyze_cut_faces(
         if not outer_edges:
             continue
         selected_records.append(record)
+        selected_components.append(component_ids.get(index, 0))
         record_edges.append(outer_edges)
 
     if not selected_records:
         return CutFaceAnalysis()
 
-    component_ids = _thickness_face_component_ids(
-        tuple(selected_records),
-        tolerance=tolerance,
-    )
     cut_edges: list[EdgeRecord] = []
 
     for record_index, edges in enumerate(record_edges):
-        component_id = component_ids.get(record_index, 0)
+        component_id = selected_components[record_index]
         for edge in edges:
             existing = _find_same_edge(cut_edges, edge.edge)
             if existing is not None:
@@ -839,10 +847,12 @@ def _analyze_cut_faces(
             edge.cut_component_id = component_id
             cut_edges.append(edge)
 
+    # Count one pierce per connected group that surfaces on the outer skin.
+    pierce_count = len({component for component in selected_components if component > 0})
     return CutFaceAnalysis(
         cut_edges=tuple(cut_edges),
         cut_faces=tuple(selected_records),
-        pierce_count=len(set(component_ids.values())),
+        pierce_count=pierce_count,
     )
 
 
