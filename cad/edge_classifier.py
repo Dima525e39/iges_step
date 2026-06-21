@@ -73,6 +73,7 @@ class EdgeRecord:
     wire_roles: set[str] = field(default_factory=set)
     reason: str = ""
     edge_type: str = ""
+    cut_component_id: int = 0
 
     @property
     def adjacent_face_count(self) -> int:
@@ -103,6 +104,13 @@ class ThicknessEstimate:
     method: str = "не определена"
     confidence: str = "низкая"
     warnings: tuple[str, ...] = ()
+
+
+@dataclass(slots=True)
+class CutFaceAnalysis:
+    cut_edges: tuple[EdgeRecord, ...] = ()
+    cut_faces: tuple[ThicknessFaceRecord, ...] = ()
+    pierce_count: int = 0
 
 
 @dataclass(slots=True)
@@ -278,7 +286,23 @@ def classify_cut_edges(
         has_outer_faces=outer_face_count > 0,
         tolerance=tolerance,
     )
-    cut_edges = groups.calculated_cut_edges
+    cut_face_analysis = _analyze_cut_faces(
+        thickness_faces,
+        axis=axis,
+        length_mm=length_mm,
+        global_bounds=global_bounds,
+        tolerance=tolerance,
+    )
+    use_cut_face_analysis = bool(cut_face_analysis.cut_edges)
+    if use_cut_face_analysis:
+        _suppress_legacy_cut_edges(
+            edge_records,
+            selected_cut_edges=cut_face_analysis.cut_edges,
+        )
+        groups = _groups_from_edge_records(edge_records)
+        cut_edges = cut_face_analysis.cut_edges
+    else:
+        cut_edges = groups.calculated_cut_edges
 
     if not cut_edges:
         warnings.append(
@@ -287,12 +311,22 @@ def classify_cut_edges(
         )
 
     cut_length_override_mm = sum(edge.length_mm for edge in cut_edges)
-    pierce_count_override = _count_cut_edge_components(
-        cut_edges,
-        axis=axis,
-        global_bounds=global_bounds,
-        tolerance=tolerance,
-    )
+    if use_cut_face_analysis:
+        pierce_count_override = cut_face_analysis.pierce_count
+        warnings.append(
+            "Длина реза рассчитана по наружным границам граней стенки реза; "
+            "внутренние кромки толщины и разбиение CAD-граней не суммируются."
+        )
+    else:
+        pierce_count_override = _count_cut_edge_components(
+            cut_edges,
+            axis=axis,
+            global_bounds=global_bounds,
+            tolerance=tolerance,
+        )
+        warnings.append(
+            "Грани стенки реза не найдены; использован fallback по классификации B-Rep ребер."
+        )
     thickness_estimate = estimate_wall_thickness(
         face_records,
         edge_records,
@@ -443,8 +477,6 @@ def _collect_thickness_face_records(
             continue
 
         area_mm2 = _face_area(face_record.face, warnings)
-        if area_mm2 <= tolerance:
-            continue
 
         edge_lengths = tuple(
             edge.length_mm for edge in face_edges if edge.length_mm > tolerance
@@ -454,12 +486,10 @@ def _collect_thickness_face_records(
             edge_lengths,
             tolerance=tolerance,
         )
-        if thickness_mm <= tolerance:
-            continue
 
-        cut_length_mm = area_mm2 / thickness_mm
-        if cut_length_mm <= tolerance:
-            continue
+        cut_length_mm = 0.0
+        if area_mm2 > tolerance and thickness_mm > tolerance:
+            cut_length_mm = area_mm2 / thickness_mm
 
         records.append(
             ThicknessFaceRecord(
@@ -755,6 +785,183 @@ def _distinct_sorted(values: Iterable[float], *, tolerance: float) -> tuple[floa
             continue
         distinct.append(value)
     return tuple(distinct)
+
+
+def _analyze_cut_faces(
+    records: tuple[ThicknessFaceRecord, ...],
+    *,
+    axis: str,
+    length_mm: float,
+    global_bounds: Bounds,
+    tolerance: float,
+) -> CutFaceAnalysis:
+    selected_records: list[ThicknessFaceRecord] = []
+    record_edges: list[tuple[EdgeRecord, ...]] = []
+
+    for record in records:
+        outer_edges = _outer_cut_edges_for_thickness_face(
+            record,
+            axis=axis,
+            length_mm=length_mm,
+            tolerance=tolerance,
+        )
+        if not outer_edges:
+            continue
+        selected_records.append(record)
+        record_edges.append(outer_edges)
+
+    if not selected_records:
+        return CutFaceAnalysis()
+
+    component_ids = _thickness_face_component_ids(
+        tuple(selected_records),
+        tolerance=tolerance,
+    )
+    cut_edges: list[EdgeRecord] = []
+
+    for record_index, edges in enumerate(record_edges):
+        component_id = component_ids.get(record_index, 0)
+        for edge in edges:
+            existing = _find_same_edge(cut_edges, edge.edge)
+            if existing is not None:
+                if existing.cut_component_id <= 0 and component_id > 0:
+                    existing.cut_component_id = component_id
+                continue
+
+            edge_type, reason = _classify_cut_face_edge(
+                edge,
+                axis=axis,
+                global_bounds=global_bounds,
+                tolerance=tolerance,
+            )
+            edge.edge_type = edge_type
+            edge.reason = reason
+            edge.cut_component_id = component_id
+            cut_edges.append(edge)
+
+    return CutFaceAnalysis(
+        cut_edges=tuple(cut_edges),
+        cut_faces=tuple(selected_records),
+        pierce_count=len(set(component_ids.values())),
+    )
+
+
+def _outer_cut_edges_for_thickness_face(
+    record: ThicknessFaceRecord,
+    *,
+    axis: str,
+    length_mm: float,
+    tolerance: float,
+) -> tuple[EdgeRecord, ...]:
+    edges: list[EdgeRecord] = []
+    for edge in record.edges:
+        if edge.length_mm <= tolerance:
+            continue
+        if not _edge_touches_outer_face(edge, record.face):
+            continue
+        if _looks_like_longitudinal_seam(edge, axis=axis, length_mm=length_mm):
+            continue
+        if _find_same_edge(edges, edge.edge) is not None:
+            continue
+        edges.append(edge)
+    return tuple(edges)
+
+
+def _classify_cut_face_edge(
+    edge: EdgeRecord,
+    *,
+    axis: str,
+    global_bounds: Bounds,
+    tolerance: float,
+) -> tuple[str, str]:
+    if _is_tube_end_edge(
+        edge,
+        axis=axis,
+        global_bounds=global_bounds,
+        tolerance=tolerance,
+    ):
+        return CUT_END, "CUT_END cut-face outer contour"
+    return CUT_FEATURE, "CUT_FEATURE cut-face outer contour"
+
+
+def _thickness_face_component_ids(
+    records: tuple[ThicknessFaceRecord, ...],
+    *,
+    tolerance: float,
+) -> dict[int, int]:
+    if not records:
+        return {}
+
+    parent = list(range(len(records)))
+
+    def find(index: int) -> int:
+        while parent[index] != index:
+            parent[index] = parent[parent[index]]
+            index = parent[index]
+        return index
+
+    def union(first: int, second: int) -> None:
+        first_root = find(first)
+        second_root = find(second)
+        if first_root != second_root:
+            parent[second_root] = first_root
+
+    for left_index, left in enumerate(records):
+        for right_index in range(left_index + 1, len(records)):
+            if _thickness_faces_touch(left, records[right_index], tolerance=tolerance):
+                union(left_index, right_index)
+
+    root_to_component: dict[int, int] = {}
+    component_ids: dict[int, int] = {}
+    for index in range(len(records)):
+        root = find(index)
+        if root not in root_to_component:
+            root_to_component[root] = len(root_to_component) + 1
+        component_ids[index] = root_to_component[root]
+    return component_ids
+
+
+def _suppress_legacy_cut_edges(
+    edges: Iterable[EdgeRecord],
+    *,
+    selected_cut_edges: tuple[EdgeRecord, ...],
+) -> None:
+    selected_ids = {id(edge) for edge in selected_cut_edges}
+    for edge in edges:
+        if id(edge) in selected_ids:
+            continue
+        if edge.edge_type in CALCULATED_CUT_TYPES:
+            edge.edge_type = UNCERTAIN
+            edge.reason = "ignored by cut-face component analysis"
+            edge.cut_component_id = 0
+
+
+def _groups_from_edge_records(edges: Iterable[EdgeRecord]) -> EdgeGroups:
+    calculated_cut_edges: list[EdgeRecord] = []
+    ignored_longitudinal_edges: list[EdgeRecord] = []
+    ignored_profile_edges: list[EdgeRecord] = []
+    ignored_plane_radius_edges: list[EdgeRecord] = []
+    uncertain_edges: list[EdgeRecord] = []
+
+    for edge in edges:
+        if edge.edge_type in CALCULATED_CUT_TYPES:
+            calculated_cut_edges.append(edge)
+        elif edge.edge_type == IGNORED_LONGITUDINAL:
+            ignored_longitudinal_edges.append(edge)
+        elif edge.edge_type == IGNORED_PROFILE:
+            ignored_profile_edges.append(edge)
+        elif edge.edge_type == IGNORED_PLANE_RADIUS:
+            ignored_plane_radius_edges.append(edge)
+        elif edge.edge_type == UNCERTAIN:
+            uncertain_edges.append(edge)
+
+    return EdgeGroups(
+        calculated_cut_edges=tuple(calculated_cut_edges),
+        ignored_longitudinal_edges=tuple(ignored_longitudinal_edges),
+        ignored_profile_edges=tuple(ignored_profile_edges),
+        ignored_plane_radius_edges=tuple(ignored_plane_radius_edges),
+        uncertain_edges=tuple(uncertain_edges),
+    )
 
 
 def _count_thickness_face_components(

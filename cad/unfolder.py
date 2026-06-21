@@ -241,6 +241,14 @@ def _component_ids(
     if not edges:
         return {}
 
+    explicit_ids = {
+        index: int(getattr(edge, "cut_component_id", 0) or 0) - 1
+        for index, edge in enumerate(edges)
+        if int(getattr(edge, "cut_component_id", 0) or 0) > 0
+    }
+    if len(explicit_ids) == len(edges):
+        return explicit_ids
+
     parent = list(range(len(edges)))
 
     def find(index: int) -> int:

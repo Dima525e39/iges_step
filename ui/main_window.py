@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QDoubleSpinBox,
+    QScrollArea,
     QSplitter,
     QTabWidget,
     QVBoxLayout,
@@ -154,9 +155,18 @@ class MainWindow(QMainWindow):
         return panel
 
     def _build_right_panel(self) -> QWidget:
+        outer_panel = QWidget()
+        outer_panel.setMinimumWidth(300)
+        outer_panel.setMaximumWidth(380)
+        outer_layout = QVBoxLayout(outer_panel)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+        outer_layout.addWidget(scroll_area)
+
         panel = QWidget()
-        panel.setMinimumWidth(300)
-        panel.setMaximumWidth(380)
         layout = QVBoxLayout(panel)
 
         params_group = QGroupBox("Параметры")
@@ -250,7 +260,8 @@ class MainWindow(QMainWindow):
         self.geometry_debug_button = QPushButton("DEV: скрипт анализа")
         self.geometry_debug_button.setEnabled(False)
         layout.addWidget(self.geometry_debug_button)
-        return panel
+        scroll_area.setWidget(panel)
+        return outer_panel
 
     def _make_money_input(self, value: float) -> QDoubleSpinBox:
         spin_box = QDoubleSpinBox()

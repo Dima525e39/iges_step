@@ -16,6 +16,7 @@ from cad.edge_classifier import (
     EdgeClassificationResult,
     FaceRecord,
     ThicknessFaceRecord,
+    _analyze_cut_faces,
     _classify_edge_groups,
     _collect_thickness_outer_cut_edges,
     _count_cut_edge_components,
@@ -621,6 +622,97 @@ class GeometryAnalyzerTests(unittest.TestCase):
 
         self.assertEqual(cut_edges, (outer_edge,))
         self.assertEqual(outer_edge.reason, "outer thickness contour")
+
+    def test_cut_face_analysis_counts_wrapped_feature_as_one_pierce(self) -> None:
+        outer_face = FaceRecord(
+            face=object(),
+            bounds=Bounds(0.0, 0.0, 0.0, 80.0, 0.0, 1000.0),
+            is_outer_longitudinal=True,
+        )
+        first_face = FaceRecord(
+            face=object(),
+            bounds=Bounds(20.0, 0.0, 300.0, 50.0, 3.0, 330.0),
+            is_outer_longitudinal=False,
+        )
+        second_face = FaceRecord(
+            face=object(),
+            bounds=Bounds(50.0, 0.0, 300.0, 80.0, 20.0, 330.0),
+            is_outer_longitudinal=False,
+        )
+        third_face = FaceRecord(
+            face=object(),
+            bounds=Bounds(20.0, 20.0, 300.0, 50.0, 40.0, 330.0),
+            is_outer_longitudinal=False,
+        )
+        first_outer_edge = EdgeRecord(
+            edge=object(),
+            length_mm=30.0,
+            bounds=Bounds(20.0, 0.0, 300.0, 50.0, 0.0, 300.0),
+            faces=[outer_face, first_face],
+        )
+        second_outer_edge = EdgeRecord(
+            edge=object(),
+            length_mm=25.0,
+            bounds=Bounds(80.0, 0.0, 300.0, 80.0, 20.0, 300.0),
+            faces=[outer_face, second_face],
+        )
+        third_outer_edge = EdgeRecord(
+            edge=object(),
+            length_mm=35.0,
+            bounds=Bounds(20.0, 40.0, 300.0, 50.0, 40.0, 300.0),
+            faces=[outer_face, third_face],
+        )
+        first_join = EdgeRecord(
+            edge=object(),
+            length_mm=3.0,
+            start_point=(50.0, 0.0, 300.0),
+            end_point=(50.0, 3.0, 300.0),
+            faces=[first_face, second_face],
+        )
+        second_join = EdgeRecord(
+            edge=object(),
+            length_mm=3.0,
+            start_point=(50.0, 20.0, 300.0),
+            end_point=(50.0, 23.0, 300.0),
+            faces=[second_face, third_face],
+        )
+        records = (
+            ThicknessFaceRecord(
+                face=first_face,
+                area_mm2=90.0,
+                thickness_mm=3.0,
+                cut_length_mm=30.0,
+                edges=(first_outer_edge, first_join),
+            ),
+            ThicknessFaceRecord(
+                face=second_face,
+                area_mm2=75.0,
+                thickness_mm=3.0,
+                cut_length_mm=25.0,
+                edges=(second_outer_edge, first_join, second_join),
+            ),
+            ThicknessFaceRecord(
+                face=third_face,
+                area_mm2=105.0,
+                thickness_mm=3.0,
+                cut_length_mm=35.0,
+                edges=(third_outer_edge, second_join),
+            ),
+        )
+
+        analysis = _analyze_cut_faces(
+            records,
+            axis="Z",
+            length_mm=1000.0,
+            global_bounds=Bounds(0.0, 0.0, 0.0, 80.0, 40.0, 1000.0),
+            tolerance=0.01,
+        )
+
+        self.assertEqual(analysis.cut_edges, (first_outer_edge, second_outer_edge, third_outer_edge))
+        self.assertEqual(sum(edge.length_mm for edge in analysis.cut_edges), 90.0)
+        self.assertEqual(analysis.pierce_count, 1)
+        self.assertEqual({edge.edge_type for edge in analysis.cut_edges}, {CUT_FEATURE})
+        self.assertEqual({edge.cut_component_id for edge in analysis.cut_edges}, {1})
 
     def test_cut_edge_components_count_one_wrapped_cut_as_one_pierce(self) -> None:
         first = EdgeRecord(
