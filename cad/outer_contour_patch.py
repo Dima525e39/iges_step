@@ -1,93 +1,10 @@
 from __future__ import annotations
 
-import sys
-
 
 def install_outer_contour_patch() -> None:
     import cad.edge_classifier as edge_classifier
 
-    if getattr(edge_classifier, "_OUTER_CONTOUR_PATCH_INSTALLED", False):
-        return
-
-    original_classify_cut_edges = edge_classifier.classify_cut_edges
-
-    def classify_cut_edges_with_unfolded_surface(
-        shape: object | None,
-        *,
-        summary: object,
-        length_axis: str,
-    ) -> object:
-        result = original_classify_cut_edges(
-            shape,
-            summary=summary,
-            length_axis=length_axis,
-        )
-        if shape is None:
-            return result
-
-        axis = length_axis if length_axis in edge_classifier.AXIS_INDEX else "Z"
-        length_mm = edge_classifier._summary_axis_size(summary, axis)
-        tolerance = edge_classifier._tolerance_from_summary(summary)
-        warnings = [
-            warning
-            for warning in getattr(result, "warnings", ())
-            if "граням в толщине изделия" not in str(warning)
-            and "наружным ребрам граней толщины" not in str(warning)
-        ]
-        try:
-            global_bounds = edge_classifier._shape_bounds(shape)
-            contour_edges = _collect_unfolded_surface_cut_edges(
-                edge_classifier,
-                shape,
-                axis=axis,
-                length_mm=length_mm,
-                global_bounds=global_bounds,
-                tolerance=tolerance,
-                warnings=warnings,
-            )
-        except Exception as exc:
-            warnings.append(f"Расчет по развертке наружной оболочки не выполнен: {exc}")
-            return edge_classifier.EdgeClassificationResult(
-                cut_edges=result.cut_edges,
-                all_edge_count=result.all_edge_count,
-                outer_face_count=result.outer_face_count,
-                thickness_faces=getattr(result, "thickness_faces", ()),
-                wall_thickness_mm=getattr(result, "wall_thickness_mm", 0.0),
-                cut_length_override_mm=getattr(result, "cut_length_override_mm", None),
-                pierce_count_override=getattr(result, "pierce_count_override", None),
-                warnings=tuple(warnings),
-            )
-
-        if not contour_edges:
-            return result
-
-        warnings.append(
-            "Длина реза рассчитана как контуры на 2D-развертке наружной оболочки: "
-            "внутренние контуры вырезов плюс торцы трубы."
-        )
-        return edge_classifier.EdgeClassificationResult(
-            cut_edges=contour_edges,
-            all_edge_count=result.all_edge_count,
-            outer_face_count=result.outer_face_count,
-            thickness_faces=getattr(result, "thickness_faces", ()),
-            wall_thickness_mm=getattr(result, "wall_thickness_mm", 0.0),
-            cut_length_override_mm=sum(edge.length_mm for edge in contour_edges),
-            pierce_count_override=_count_cut_edge_components(
-                edge_classifier,
-                contour_edges,
-                axis=axis,
-                global_bounds=global_bounds,
-                tolerance=tolerance,
-            ),
-            warnings=tuple(warnings),
-        )
-
-    edge_classifier.classify_cut_edges = classify_cut_edges_with_unfolded_surface
     edge_classifier._OUTER_CONTOUR_PATCH_INSTALLED = True
-
-    analyzer = sys.modules.get("cad.analyzer")
-    if analyzer is not None:
-        analyzer.classify_cut_edges = classify_cut_edges_with_unfolded_surface
 
 
 def _collect_unfolded_surface_cut_edges(

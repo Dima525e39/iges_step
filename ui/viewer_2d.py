@@ -76,6 +76,7 @@ class Viewer2D(QWidget):
         self.header.setText(
             f"{job.name}: развертка расчета | "
             f"рез {preview.cut_length_mm:.1f} мм | "
+            f"диагн. {preview.diagnostic_edge_length_mm:.1f} мм | "
             f"врезок {preview.pierce_count}"
         )
 
@@ -85,11 +86,9 @@ class Viewer2D(QWidget):
         scene_rect = QRectF(0.0, 0.0, length + margin * 2.0, perimeter + margin * 2.0)
         self.scene.setSceneRect(scene_rect)
 
-        frame_pen = QPen(QColor("#94a3b8"), 1.0)
-        frame_pen.setCosmetic(True)
         self.scene.addRect(
             QRectF(margin, margin, length, perimeter),
-            frame_pen,
+            QPen(Qt.PenStyle.NoPen),
             QBrush(QColor("#ffffff")),
         )
 
@@ -101,32 +100,69 @@ class Viewer2D(QWidget):
             y = margin + perimeter * ratio
             self.scene.addLine(margin, y, margin + length, y, grid_pen)
 
-        for segment in preview.segments:
-            color = _segment_color(segment.reason)
-            pen = QPen(color, 3.0)
-            pen.setCosmetic(True)
-            self.scene.addLine(
-                margin + segment.start.x_mm,
-                margin + segment.start.y_mm,
-                margin + segment.end.x_mm,
-                margin + segment.end.y_mm,
-                pen,
+        for segment in preview.auxiliary_unfold_segments:
+            self._draw_segment(segment, margin=margin, color=QColor("#94a3b8"), width=1.0)
+
+        for segment in preview.ignored_profile_segments:
+            self._draw_segment(segment, margin=margin, color=QColor("#cbd5e1"), width=1.0)
+
+        for segment in preview.ignored_longitudinal_segments:
+            self._draw_segment(
+                segment,
+                margin=margin,
+                color=QColor("#94a3b8"),
+                width=1.0,
+                dashed=True,
             )
 
-            text = self.scene.addText(str(segment.component_id + 1))
-            text.setDefaultTextColor(color)
-            text.setFont(QFont("Arial", 8, QFont.Weight.Bold))
-            text.setPos(
-                margin + (segment.start.x_mm + segment.end.x_mm) / 2.0 + 3.0,
-                margin + (segment.start.y_mm + segment.end.y_mm) / 2.0 + 3.0,
+        for segment in preview.uncertain_segments:
+            self._draw_segment(
+                segment,
+                margin=margin,
+                color=QColor("#f59e0b"),
+                width=1.5,
+                dashed=True,
             )
 
-        if not preview.segments:
+        for segment in preview.calculated_cut_segments:
+            color = _segment_color(segment.edge_type)
+            self._draw_segment(segment, margin=margin, color=color, width=3.0)
+            if segment.component_id >= 0:
+                text = self.scene.addText(str(segment.component_id + 1))
+                text.setDefaultTextColor(color)
+                text.setFont(QFont("Arial", 8, QFont.Weight.Bold))
+                text.setPos(
+                    margin + (segment.start.x_mm + segment.end.x_mm) / 2.0 + 3.0,
+                    margin + (segment.start.y_mm + segment.end.y_mm) / 2.0 + 3.0,
+                )
+
+        if not preview.calculated_cut_segments:
             text = self.scene.addText("Нет отмеченных контуров")
             text.setDefaultTextColor(QColor("#64748b"))
             text.setPos(margin + 8.0, margin + 8.0)
 
         self._fit_scene()
+
+    def _draw_segment(
+        self,
+        segment: object,
+        *,
+        margin: float,
+        color: QColor,
+        width: float,
+        dashed: bool = False,
+    ) -> None:
+        pen = QPen(color, width)
+        pen.setCosmetic(True)
+        if dashed:
+            pen.setStyle(Qt.PenStyle.DashLine)
+        self.scene.addLine(
+            margin + segment.start.x_mm,
+            margin + segment.start.y_mm,
+            margin + segment.end.x_mm,
+            margin + segment.end.y_mm,
+            pen,
+        )
 
     def _clear_scene(self) -> None:
         self.scene.clear()
@@ -156,9 +192,9 @@ def _longest_axis(summary: object) -> str:
     return max(sizes.items(), key=lambda item: item[1])[0]
 
 
-def _segment_color(reason: str) -> QColor:
-    if reason == "unfolded tube end":
-        return QColor("#2563eb")
-    if "inner" in reason:
+def _segment_color(edge_type: str) -> QColor:
+    if edge_type == "CUT_END":
+        return QColor("#dc2626")
+    if edge_type == "CUT_FEATURE":
         return QColor("#dc2626")
     return QColor("#f97316")

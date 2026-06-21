@@ -21,7 +21,10 @@ class FileJob:
     tube_length_mm: str = PLACEHOLDER
     wall_thickness_mm: str = PLACEHOLDER
     cut_length_mm: str = PLACEHOLDER
+    diagnostic_edge_length_mm: str = PLACEHOLDER
     pierce_count: str = PLACEHOLDER
+    ignored_longitudinal_edges: str = PLACEHOLDER
+    auxiliary_unfold_edges: str = PLACEHOLDER
     price: str = PLACEHOLDER
     error_text: str = ""
     warnings: list[str] = field(default_factory=list)
@@ -43,7 +46,10 @@ class FileJob:
             self.tube_length_mm,
             self.wall_thickness_mm,
             self.cut_length_mm,
+            self.diagnostic_edge_length_mm,
             self.pierce_count,
+            self.ignored_longitudinal_edges,
+            self.auxiliary_unfold_edges,
             self.price,
             self.error_text,
         ]
@@ -56,7 +62,10 @@ class FileJob:
             "tube_length_mm": self.tube_length_mm,
             "wall_thickness_mm": self.wall_thickness_mm,
             "cut_length_mm": self.cut_length_mm,
+            "diagnostic_edge_length_mm": self.diagnostic_edge_length_mm,
             "pierce_count": self.pierce_count,
+            "ignored_longitudinal_edges": self.ignored_longitudinal_edges,
+            "auxiliary_unfold_edges": self.auxiliary_unfold_edges,
             "price": self.price,
             "error_text": self.error_text,
             "warnings": list(self.warnings),
@@ -71,7 +80,14 @@ class FileJob:
             tube_length_mm=str(data.get("tube_length_mm", PLACEHOLDER)),
             wall_thickness_mm=str(data.get("wall_thickness_mm", PLACEHOLDER)),
             cut_length_mm=str(data.get("cut_length_mm", PLACEHOLDER)),
+            diagnostic_edge_length_mm=str(
+                data.get("diagnostic_edge_length_mm", PLACEHOLDER)
+            ),
             pierce_count=str(data.get("pierce_count", PLACEHOLDER)),
+            ignored_longitudinal_edges=str(
+                data.get("ignored_longitudinal_edges", PLACEHOLDER)
+            ),
+            auxiliary_unfold_edges=str(data.get("auxiliary_unfold_edges", PLACEHOLDER)),
             price=str(data.get("price", PLACEHOLDER)),
             error_text=str(data.get("error_text", "")),
             warnings=[str(item) for item in data.get("warnings", [])],

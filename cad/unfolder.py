@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from cad.edge_classifier import AXIS_INDEX, Bounds
+from cad.edge_classifier import AUXILIARY_UNFOLD, CUT_END, CUT_FEATURE, AXIS_INDEX, Bounds
 from cad.shape_summary import ShapeSummary
 
 
@@ -19,6 +19,7 @@ class UnfoldedSegment:
     length_mm: float
     reason: str
     component_id: int
+    edge_type: str
 
 
 @dataclass(slots=True)
@@ -26,8 +27,14 @@ class UnfoldingPreview:
     length_mm: float
     perimeter_mm: float
     cut_length_mm: float
+    diagnostic_edge_length_mm: float
     pierce_count: int
     segments: tuple[UnfoldedSegment, ...]
+    calculated_cut_segments: tuple[UnfoldedSegment, ...] = ()
+    auxiliary_unfold_segments: tuple[UnfoldedSegment, ...] = ()
+    ignored_longitudinal_segments: tuple[UnfoldedSegment, ...] = ()
+    ignored_profile_segments: tuple[UnfoldedSegment, ...] = ()
+    uncertain_segments: tuple[UnfoldedSegment, ...] = ()
     warnings: tuple[str, ...] = ()
 
 
@@ -59,8 +66,10 @@ def build_unfolding_preview(
             length_mm=_summary_axis_size(summary, length_axis),
             perimeter_mm=0.0,
             cut_length_mm=0.0,
+            diagnostic_edge_length_mm=0.0,
             pierce_count=0,
             segments=(),
+            auxiliary_unfold_segments=(),
             warnings=("Нет формы OpenCascade для построения развертки.",),
         )
 
@@ -75,12 +84,16 @@ def build_unfolding_preview(
     )
     tolerance = edge_classifier._tolerance_from_summary(summary)
     return build_unfolding_preview_from_edges(
-        classification.cut_edges,
+        classification.calculated_cut_edges,
         axis=axis,
         global_bounds=global_bounds,
         cut_length_mm=classification.cut_length_mm,
+        diagnostic_edge_length_mm=classification.diagnostic_edge_length_mm,
         pierce_count=classification.pierce_count or 0,
         tolerance=tolerance,
+        ignored_longitudinal_edges=classification.ignored_longitudinal_edges,
+        ignored_profile_edges=classification.ignored_profile_edges,
+        uncertain_edges=classification.uncertain_edges,
         warnings=classification.warnings,
     )
 
@@ -93,6 +106,10 @@ def build_unfolding_preview_from_edges(
     cut_length_mm: float,
     pierce_count: int,
     tolerance: float,
+    diagnostic_edge_length_mm: float = 0.0,
+    ignored_longitudinal_edges: tuple[object, ...] | list[object] = (),
+    ignored_profile_edges: tuple[object, ...] | list[object] = (),
+    uncertain_edges: tuple[object, ...] | list[object] = (),
     warnings: tuple[str, ...] = (),
 ) -> UnfoldingPreview:
     axis = axis if axis in AXIS_INDEX else "Z"
@@ -104,29 +121,103 @@ def build_unfolding_preview_from_edges(
         global_bounds=global_bounds,
         tolerance=tolerance,
     )
+    calculated_cut_segments = _segments_from_edges(
+        edges,
+        axis=axis,
+        global_bounds=global_bounds,
+        component_ids=component_ids,
+        default_edge_type=CUT_FEATURE,
+    )
+    auxiliary_unfold_segments = _auxiliary_unfold_segments(
+        length_mm=length_mm,
+        perimeter_mm=perimeter_mm,
+    )
+    ignored_longitudinal_segments = _segments_from_edges(
+        ignored_longitudinal_edges,
+        axis=axis,
+        global_bounds=global_bounds,
+        default_edge_type="IGNORED_LONGITUDINAL",
+    )
+    ignored_profile_segments = _segments_from_edges(
+        ignored_profile_edges,
+        axis=axis,
+        global_bounds=global_bounds,
+        default_edge_type="IGNORED_PROFILE",
+    )
+    uncertain_segments = _segments_from_edges(
+        uncertain_edges,
+        axis=axis,
+        global_bounds=global_bounds,
+        default_edge_type="UNCERTAIN",
+    )
+
+    return UnfoldingPreview(
+        length_mm=length_mm,
+        perimeter_mm=perimeter_mm,
+        cut_length_mm=cut_length_mm,
+        diagnostic_edge_length_mm=diagnostic_edge_length_mm,
+        pierce_count=pierce_count,
+        segments=calculated_cut_segments,
+        calculated_cut_segments=calculated_cut_segments,
+        auxiliary_unfold_segments=auxiliary_unfold_segments,
+        ignored_longitudinal_segments=ignored_longitudinal_segments,
+        ignored_profile_segments=ignored_profile_segments,
+        uncertain_segments=uncertain_segments,
+        warnings=warnings,
+    )
+
+
+def _segments_from_edges(
+    edges: tuple[object, ...] | list[object],
+    *,
+    axis: str,
+    global_bounds: Bounds,
+    component_ids: dict[int, int] | None = None,
+    default_edge_type: str,
+) -> tuple[UnfoldedSegment, ...]:
     segments: list[UnfoldedSegment] = []
     for index, edge in enumerate(edges):
         points = _edge_points(edge, axis=axis)
         if points is None:
             continue
         start, end = points
+        edge_type = str(getattr(edge, "edge_type", "") or default_edge_type)
         segments.append(
             UnfoldedSegment(
                 start=_project_point(start, axis=axis, global_bounds=global_bounds),
                 end=_project_point(end, axis=axis, global_bounds=global_bounds),
                 length_mm=float(getattr(edge, "length_mm", 0.0) or 0.0),
-                reason=str(getattr(edge, "reason", "") or "cut contour"),
-                component_id=component_ids.get(index, index),
+                reason=str(getattr(edge, "reason", "") or edge_type),
+                component_id=(component_ids or {}).get(index, -1),
+                edge_type=edge_type,
             )
         )
+    return tuple(segments)
 
-    return UnfoldingPreview(
-        length_mm=length_mm,
-        perimeter_mm=perimeter_mm,
-        cut_length_mm=cut_length_mm,
-        pierce_count=pierce_count,
-        segments=tuple(segments),
-        warnings=warnings,
+
+def _auxiliary_unfold_segments(
+    *,
+    length_mm: float,
+    perimeter_mm: float,
+) -> tuple[UnfoldedSegment, ...]:
+    if length_mm <= 0.0 or perimeter_mm <= 0.0:
+        return ()
+    points = (
+        (UnfoldedPoint(0.0, 0.0), UnfoldedPoint(length_mm, 0.0)),
+        (UnfoldedPoint(length_mm, 0.0), UnfoldedPoint(length_mm, perimeter_mm)),
+        (UnfoldedPoint(length_mm, perimeter_mm), UnfoldedPoint(0.0, perimeter_mm)),
+        (UnfoldedPoint(0.0, perimeter_mm), UnfoldedPoint(0.0, 0.0)),
+    )
+    return tuple(
+        UnfoldedSegment(
+            start=start,
+            end=end,
+            length_mm=0.0,
+            reason="auxiliary unfold boundary",
+            component_id=-1,
+            edge_type=AUXILIARY_UNFOLD,
+        )
+        for start, end in points
     )
 
 
@@ -184,9 +275,9 @@ def _same_tube_end_side(
     global_bounds: Bounds,
     tolerance: float,
 ) -> bool:
-    if getattr(first, "reason", "") != "unfolded tube end":
+    if getattr(first, "edge_type", "") != CUT_END:
         return False
-    if getattr(second, "reason", "") != "unfolded tube end":
+    if getattr(second, "edge_type", "") != CUT_END:
         return False
     first_side = _edge_end_side(first, axis=axis, global_bounds=global_bounds, tolerance=tolerance)
     return first_side is not None and first_side == _edge_end_side(

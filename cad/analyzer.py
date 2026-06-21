@@ -27,9 +27,14 @@ class GeometryAnalysisResult:
     shell_count: int
     wall_thickness_mm: float = 0.0
     cut_length_mm: float = 0.0
+    diagnostic_edge_length_mm: float = 0.0
     pierce_count: int = 0
     cut_edge_count: int = 0
     outer_face_count: int = 0
+    ignored_longitudinal_edge_count: int = 0
+    ignored_profile_edge_count: int = 0
+    auxiliary_unfold_edge_count: int = 0
+    uncertain_edge_count: int = 0
     warnings: tuple[str, ...] = ()
 
     def as_dict(self) -> dict[str, object]:
@@ -49,10 +54,15 @@ class GeometryAnalysisResult:
             f"Топология: solid={self.solid_count}, shell={self.shell_count}, "
             f"faces={self.face_count}, edges={self.edge_count}",
             f"Толщина стенки (предварительно): {self.wall_thickness_mm:.3f} мм",
-            f"Длина реза (предварительно): {self.cut_length_mm:.3f} мм",
+            f"Длина реального реза: {self.cut_length_mm:.3f} мм",
+            f"Диагностическая сумма всех ребер: {self.diagnostic_edge_length_mm:.3f} мм",
             f"Врезки/контуры (предварительно): {self.pierce_count}",
             f"Кандидатов ребер реза: {self.cut_edge_count}",
             f"Наружных продольных граней: {self.outer_face_count}",
+            f"Игнорированных продольных ребер: {self.ignored_longitudinal_edge_count}",
+            f"Игнорированных профильных ребер: {self.ignored_profile_edge_count}",
+            f"Вспомогательных линий развертки: {self.auxiliary_unfold_edge_count}",
+            f"Сомнительных ребер: {self.uncertain_edge_count}",
         ]
         if self.warnings:
             lines.append("Предупреждения:")
@@ -112,10 +122,15 @@ def analyze_shape(
     profile = detect_profile_from_dimensions(length_mm, width_mm, height_mm)
     profile_hint = profile.profile_type
     cut_length_mm = 0.0
+    diagnostic_edge_length_mm = 0.0
     pierce_count = 0
     cut_edge_count = 0
     outer_face_count = 0
     wall_thickness_mm = 0.0
+    ignored_longitudinal_edge_count = 0
+    ignored_profile_edge_count = 0
+    auxiliary_unfold_edge_count = 0
+    uncertain_edge_count = 0
     if min(sizes.values()) <= 0.0:
         warnings.append("Один из габаритов равен нулю; модель может быть поверхностной.")
     if solid_count == 0 and shell_count > 0:
@@ -134,6 +149,11 @@ def analyze_shape(
         cut_edge_count = classification.cut_edge_count
         outer_face_count = classification.outer_face_count
         wall_thickness_mm = classification.wall_thickness_mm
+        diagnostic_edge_length_mm = classification.diagnostic_edge_length_mm
+        ignored_longitudinal_edge_count = classification.ignored_longitudinal_edge_count
+        ignored_profile_edge_count = classification.ignored_profile_edge_count
+        auxiliary_unfold_edge_count = 4 if classification.outer_face_count else 0
+        uncertain_edge_count = classification.uncertain_edge_count
         warnings.extend(classification.warnings)
         if classification.pierce_count is None:
             warnings.extend(pierce_estimate.warnings)
@@ -159,9 +179,14 @@ def analyze_shape(
         shell_count=shell_count,
         wall_thickness_mm=wall_thickness_mm,
         cut_length_mm=cut_length_mm,
+        diagnostic_edge_length_mm=diagnostic_edge_length_mm,
         pierce_count=pierce_count,
         cut_edge_count=cut_edge_count,
         outer_face_count=outer_face_count,
+        ignored_longitudinal_edge_count=ignored_longitudinal_edge_count,
+        ignored_profile_edge_count=ignored_profile_edge_count,
+        auxiliary_unfold_edge_count=auxiliary_unfold_edge_count,
+        uncertain_edge_count=uncertain_edge_count,
         warnings=tuple(warnings),
     )
 

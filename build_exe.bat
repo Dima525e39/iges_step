@@ -2,7 +2,7 @@
 setlocal
 
 set APP_NAME=TubeCutCalculator
-set APP_VERSION=v0.4.5
+set APP_VERSION=v0.4.6
 set ENV_NAME=TubeCutCalculator
 
 echo Building %APP_NAME% %APP_VERSION%
@@ -32,7 +32,7 @@ if errorlevel 1 (
     if errorlevel 1 exit /b 1
 )
 
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$date=(Get-Date).ToString('yyyy-MM-dd HH:mm:ss'); Set-Content -Encoding UTF8 version.txt @('TubeCutCalculator v0.4.5','Build date: ' + $date,'Description: STEP/IGES import, 3D viewer, temporary DEV script window, diagnostic 2D unfolding preview, basic tube analysis, cut length, pierces, wall thickness, and price estimate.')"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$date=(Get-Date).ToString('yyyy-MM-dd HH:mm:ss'); Set-Content -Encoding UTF8 version.txt @('TubeCutCalculator v0.4.6','Build date: ' + $date,'Description: STEP/IGES import, 3D viewer, real cut length from CUT_FEATURE/CUT_END only, diagnostic 2D unfolding preview, pierces, wall thickness, and price estimate.')"
 if errorlevel 1 exit /b 1
 
 call %CONDA_CMD% run -n %ENV_NAME% python -m PyInstaller --noconfirm --clean TubeCutCalculator.spec

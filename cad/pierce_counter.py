@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from cad.edge_classifier import EdgeClassificationResult, EdgeRecord
+from cad.edge_classifier import CALCULATED_CUT_TYPES, EdgeClassificationResult, EdgeRecord
 
 POINT_TOLERANCE_MM = 0.01
 
@@ -19,11 +19,16 @@ class PierceCounter:
 
     def count(self, contours: object) -> int:
         if isinstance(contours, EdgeClassificationResult):
-            return count_edge_components(contours.cut_edges).pierce_count
+            return count_edge_components(contours.calculated_cut_edges or contours.cut_edges).pierce_count
         raise TypeError("Ожидался EdgeClassificationResult.")
 
 
 def count_edge_components(edges: tuple[EdgeRecord, ...]) -> PierceEstimate:
+    edges = tuple(
+        edge
+        for edge in edges
+        if not getattr(edge, "edge_type", "") or edge.edge_type in CALCULATED_CUT_TYPES
+    )
     if not edges:
         return PierceEstimate(pierce_count=0)
 
