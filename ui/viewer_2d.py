@@ -115,6 +115,15 @@ class Viewer2D(QWidget):
                 dashed=True,
             )
 
+        for segment in preview.ignored_plane_radius_segments:
+            self._draw_segment(
+                segment,
+                margin=margin,
+                color=QColor("#64748b"),
+                width=1.0,
+                dashed=True,
+            )
+
         for segment in preview.uncertain_segments:
             self._draw_segment(
                 segment,

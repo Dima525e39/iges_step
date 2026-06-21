@@ -34,6 +34,7 @@ class UnfoldingPreview:
     auxiliary_unfold_segments: tuple[UnfoldedSegment, ...] = ()
     ignored_longitudinal_segments: tuple[UnfoldedSegment, ...] = ()
     ignored_profile_segments: tuple[UnfoldedSegment, ...] = ()
+    ignored_plane_radius_segments: tuple[UnfoldedSegment, ...] = ()
     uncertain_segments: tuple[UnfoldedSegment, ...] = ()
     warnings: tuple[str, ...] = ()
 
@@ -93,6 +94,7 @@ def build_unfolding_preview(
         tolerance=tolerance,
         ignored_longitudinal_edges=classification.ignored_longitudinal_edges,
         ignored_profile_edges=classification.ignored_profile_edges,
+        ignored_plane_radius_edges=classification.ignored_plane_radius_edges,
         uncertain_edges=classification.uncertain_edges,
         warnings=classification.warnings,
     )
@@ -109,6 +111,7 @@ def build_unfolding_preview_from_edges(
     diagnostic_edge_length_mm: float = 0.0,
     ignored_longitudinal_edges: tuple[object, ...] | list[object] = (),
     ignored_profile_edges: tuple[object, ...] | list[object] = (),
+    ignored_plane_radius_edges: tuple[object, ...] | list[object] = (),
     uncertain_edges: tuple[object, ...] | list[object] = (),
     warnings: tuple[str, ...] = (),
 ) -> UnfoldingPreview:
@@ -144,6 +147,12 @@ def build_unfolding_preview_from_edges(
         global_bounds=global_bounds,
         default_edge_type="IGNORED_PROFILE",
     )
+    ignored_plane_radius_segments = _segments_from_edges(
+        ignored_plane_radius_edges,
+        axis=axis,
+        global_bounds=global_bounds,
+        default_edge_type="IGNORED_PLANE_RADIUS",
+    )
     uncertain_segments = _segments_from_edges(
         uncertain_edges,
         axis=axis,
@@ -162,6 +171,7 @@ def build_unfolding_preview_from_edges(
         auxiliary_unfold_segments=auxiliary_unfold_segments,
         ignored_longitudinal_segments=ignored_longitudinal_segments,
         ignored_profile_segments=ignored_profile_segments,
+        ignored_plane_radius_segments=ignored_plane_radius_segments,
         uncertain_segments=uncertain_segments,
         warnings=warnings,
     )

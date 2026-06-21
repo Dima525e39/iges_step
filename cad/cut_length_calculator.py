@@ -9,13 +9,18 @@ from cad.shape_summary import ShapeSummary
 @dataclass(slots=True)
 class CutLengthEstimate:
     cut_length_mm: float
+    cut_end_length_mm: float
+    cut_feature_length_mm: float
     diagnostic_edge_length_mm: float
     cut_edge_count: int
     outer_face_count: int
     wall_thickness_mm: float = 0.0
+    wall_thickness_method: str = "не определена"
+    wall_thickness_confidence: str = "низкая"
     thickness_face_count: int = 0
     ignored_longitudinal_edge_count: int = 0
     ignored_profile_edge_count: int = 0
+    ignored_plane_radius_edge_count: int = 0
     auxiliary_unfold_edge_count: int = 0
     uncertain_edge_count: int = 0
     warnings: tuple[str, ...] = ()
@@ -35,21 +40,28 @@ class CutLengthCalculator:
         *,
         summary: ShapeSummary,
         length_axis: str,
+        manual_wall_thickness_mm: float | None = None,
     ) -> CutLengthEstimate:
         classification = classify_cut_edges(
             shape,
             summary=summary,
             length_axis=length_axis,
+            manual_wall_thickness_mm=manual_wall_thickness_mm,
         )
         return CutLengthEstimate(
             cut_length_mm=classification.cut_length_mm,
+            cut_end_length_mm=classification.cut_end_length_mm,
+            cut_feature_length_mm=classification.cut_feature_length_mm,
             diagnostic_edge_length_mm=classification.diagnostic_edge_length_mm,
             cut_edge_count=classification.cut_edge_count,
             outer_face_count=classification.outer_face_count,
             wall_thickness_mm=classification.wall_thickness_mm,
+            wall_thickness_method=classification.wall_thickness_method,
+            wall_thickness_confidence=classification.wall_thickness_confidence,
             thickness_face_count=classification.thickness_face_count,
             ignored_longitudinal_edge_count=classification.ignored_longitudinal_edge_count,
             ignored_profile_edge_count=classification.ignored_profile_edge_count,
+            ignored_plane_radius_edge_count=classification.ignored_plane_radius_edge_count,
             auxiliary_unfold_edge_count=classification.auxiliary_unfold_edge_count,
             uncertain_edge_count=classification.uncertain_edge_count,
             warnings=classification.warnings,

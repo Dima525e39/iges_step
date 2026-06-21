@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from cad.debug_edges import write_debug_edges_csv
 from cad.edge_classifier import classify_cut_edges
 from cad.importer import CadImporter
 from cad.pierce_counter import count_edge_components
@@ -26,15 +27,21 @@ class GeometryAnalysisResult:
     solid_count: int
     shell_count: int
     wall_thickness_mm: float = 0.0
+    wall_thickness_method: str = "не определена"
+    wall_thickness_confidence: str = "низкая"
     cut_length_mm: float = 0.0
+    cut_end_length_mm: float = 0.0
+    cut_feature_length_mm: float = 0.0
     diagnostic_edge_length_mm: float = 0.0
     pierce_count: int = 0
     cut_edge_count: int = 0
     outer_face_count: int = 0
     ignored_longitudinal_edge_count: int = 0
     ignored_profile_edge_count: int = 0
+    ignored_plane_radius_edge_count: int = 0
     auxiliary_unfold_edge_count: int = 0
     uncertain_edge_count: int = 0
+    debug_edges_path: str = ""
     warnings: tuple[str, ...] = ()
 
     def as_dict(self) -> dict[str, object]:
@@ -54,16 +61,23 @@ class GeometryAnalysisResult:
             f"Топология: solid={self.solid_count}, shell={self.shell_count}, "
             f"faces={self.face_count}, edges={self.edge_count}",
             f"Толщина стенки (предварительно): {self.wall_thickness_mm:.3f} мм",
+            f"Способ толщины: {self.wall_thickness_method}",
+            f"Confidence толщины: {self.wall_thickness_confidence}",
             f"Длина реального реза: {self.cut_length_mm:.3f} мм",
+            f"Длина торцевых резов: {self.cut_end_length_mm:.3f} мм",
+            f"Длина вырезов/пазов: {self.cut_feature_length_mm:.3f} мм",
             f"Диагностическая сумма всех ребер: {self.diagnostic_edge_length_mm:.3f} мм",
             f"Врезки/контуры (предварительно): {self.pierce_count}",
             f"Кандидатов ребер реза: {self.cut_edge_count}",
             f"Наружных продольных граней: {self.outer_face_count}",
             f"Игнорированных продольных ребер: {self.ignored_longitudinal_edge_count}",
             f"Игнорированных профильных ребер: {self.ignored_profile_edge_count}",
+            f"Игнорированных линий плоскость/радиус: {self.ignored_plane_radius_edge_count}",
             f"Вспомогательных линий развертки: {self.auxiliary_unfold_edge_count}",
             f"Сомнительных ребер: {self.uncertain_edge_count}",
         ]
+        if self.debug_edges_path:
+            lines.append(f"debug_edges.csv: {self.debug_edges_path}")
         if self.warnings:
             lines.append("Предупреждения:")
             lines.extend(f"- {warning}" for warning in self.warnings)
@@ -95,6 +109,9 @@ def analyze_shape(
     *,
     summary: ShapeSummary | None = None,
     file_format: str = "CAD",
+    manual_wall_thickness_mm: float | None = None,
+    debug_edges_path: str | Path | None = None,
+    source_path: str | Path | None = None,
 ) -> GeometryAnalysisResult:
     if summary is None:
         if shape is None:
@@ -122,15 +139,21 @@ def analyze_shape(
     profile = detect_profile_from_dimensions(length_mm, width_mm, height_mm)
     profile_hint = profile.profile_type
     cut_length_mm = 0.0
+    cut_end_length_mm = 0.0
+    cut_feature_length_mm = 0.0
     diagnostic_edge_length_mm = 0.0
     pierce_count = 0
     cut_edge_count = 0
     outer_face_count = 0
     wall_thickness_mm = 0.0
+    wall_thickness_method = "не определена"
+    wall_thickness_confidence = "низкая"
     ignored_longitudinal_edge_count = 0
     ignored_profile_edge_count = 0
+    ignored_plane_radius_edge_count = 0
     auxiliary_unfold_edge_count = 0
     uncertain_edge_count = 0
+    written_debug_edges_path = ""
     if min(sizes.values()) <= 0.0:
         warnings.append("Один из габаритов равен нулю; модель может быть поверхностной.")
     if solid_count == 0 and shell_count > 0:
@@ -140,21 +163,40 @@ def analyze_shape(
             shape,
             summary=summary,
             length_axis=length_axis,
+            manual_wall_thickness_mm=manual_wall_thickness_mm,
         )
         pierce_estimate = count_edge_components(classification.cut_edges)
         cut_length_mm = classification.cut_length_mm
+        cut_end_length_mm = classification.cut_end_length_mm
+        cut_feature_length_mm = classification.cut_feature_length_mm
         pierce_count = classification.pierce_count
         if pierce_count is None:
             pierce_count = pierce_estimate.pierce_count
         cut_edge_count = classification.cut_edge_count
         outer_face_count = classification.outer_face_count
         wall_thickness_mm = classification.wall_thickness_mm
+        wall_thickness_method = classification.wall_thickness_method
+        wall_thickness_confidence = classification.wall_thickness_confidence
         diagnostic_edge_length_mm = classification.diagnostic_edge_length_mm
         ignored_longitudinal_edge_count = classification.ignored_longitudinal_edge_count
         ignored_profile_edge_count = classification.ignored_profile_edge_count
+        ignored_plane_radius_edge_count = classification.ignored_plane_radius_edge_count
         auxiliary_unfold_edge_count = 4 if classification.outer_face_count else 0
         uncertain_edge_count = classification.uncertain_edge_count
         warnings.extend(classification.warnings)
+        if debug_edges_path is not None:
+            try:
+                debug_path = write_debug_edges_csv(
+                    classification,
+                    debug_edges_path,
+                    source_file=str(source_path or ""),
+                    length_axis=classification.length_axis,
+                    global_bounds=classification.global_bounds,
+                    tolerance=classification.tolerance,
+                )
+                written_debug_edges_path = str(debug_path)
+            except Exception as exc:
+                warnings.append(f"debug_edges.csv не записан: {exc}")
         if classification.pierce_count is None:
             warnings.extend(pierce_estimate.warnings)
         if cut_length_mm > 0.0:
@@ -178,15 +220,21 @@ def analyze_shape(
         solid_count=solid_count,
         shell_count=shell_count,
         wall_thickness_mm=wall_thickness_mm,
+        wall_thickness_method=wall_thickness_method,
+        wall_thickness_confidence=wall_thickness_confidence,
         cut_length_mm=cut_length_mm,
+        cut_end_length_mm=cut_end_length_mm,
+        cut_feature_length_mm=cut_feature_length_mm,
         diagnostic_edge_length_mm=diagnostic_edge_length_mm,
         pierce_count=pierce_count,
         cut_edge_count=cut_edge_count,
         outer_face_count=outer_face_count,
         ignored_longitudinal_edge_count=ignored_longitudinal_edge_count,
         ignored_profile_edge_count=ignored_profile_edge_count,
+        ignored_plane_radius_edge_count=ignored_plane_radius_edge_count,
         auxiliary_unfold_edge_count=auxiliary_unfold_edge_count,
         uncertain_edge_count=uncertain_edge_count,
+        debug_edges_path=written_debug_edges_path,
         warnings=tuple(warnings),
     )
 

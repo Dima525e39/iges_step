@@ -10,8 +10,10 @@ from cad.edge_classifier import (
     CUT_END,
     CUT_FEATURE,
     IGNORED_LONGITUDINAL,
+    IGNORED_PLANE_RADIUS,
     IGNORED_PROFILE,
     EdgeRecord,
+    EdgeClassificationResult,
     FaceRecord,
     ThicknessFaceRecord,
     _classify_edge_groups,
@@ -21,7 +23,9 @@ from cad.edge_classifier import (
     _estimate_face_thickness,
     _is_cut_edge_candidate,
     _is_thickness_face_candidate,
+    estimate_wall_thickness,
 )
+from cad.debug_edges import write_debug_edges_csv
 from cad.importer import CadImportError, CadImporter
 from cad.pierce_counter import _count_components_from_pairs
 from cad.profile_detector import detect_profile_from_dimensions
@@ -47,6 +51,11 @@ class FakeVertex:
 
     def IsSame(self, other: object) -> bool:
         return isinstance(other, FakeVertex) and self.name == other.name
+
+
+class FakeCylinderFace:
+    def __init__(self, radius_mm: float) -> None:
+        self.radius_mm = radius_mm
 
 
 class SupportedFormatTests(unittest.TestCase):
@@ -358,6 +367,138 @@ class GeometryAnalyzerTests(unittest.TestCase):
         self.assertEqual(end_edge.edge_type, CUT_END)
         self.assertEqual(longitudinal_edge.edge_type, IGNORED_LONGITUDINAL)
         self.assertEqual(profile_edge.edge_type, IGNORED_PROFILE)
+
+    def test_plane_radius_transition_is_ignored_separately(self) -> None:
+        first_outer = FaceRecord(
+            face=object(),
+            bounds=Bounds(0.0, 0.0, 0.0, 80.0, 0.0, 1000.0),
+            is_outer_longitudinal=True,
+        )
+        second_outer = FaceRecord(
+            face=object(),
+            bounds=Bounds(80.0, 0.0, 0.0, 80.0, 40.0, 1000.0),
+            is_outer_longitudinal=True,
+        )
+        transition = EdgeRecord(
+            edge=object(),
+            length_mm=1000.0,
+            bounds=Bounds(80.0, 0.0, 0.0, 80.0, 0.0, 1000.0),
+            faces=[first_outer, second_outer],
+        )
+
+        groups = _classify_edge_groups(
+            (transition,),
+            axis="Z",
+            length_mm=1000.0,
+            global_bounds=Bounds(0.0, 0.0, 0.0, 80.0, 40.0, 1000.0),
+            has_outer_faces=True,
+            tolerance=0.01,
+        )
+
+        self.assertEqual(groups.ignored_plane_radius_edges, (transition,))
+        self.assertEqual(transition.edge_type, IGNORED_PLANE_RADIUS)
+
+    def test_wall_thickness_uses_flat_outer_and_inner_walls(self) -> None:
+        global_bounds = Bounds(0.0, 0.0, 0.0, 80.0, 40.0, 1000.0)
+        faces = (
+            FaceRecord(object(), Bounds(0.0, 0.0, 0.0, 0.0, 40.0, 1000.0), True),
+            FaceRecord(object(), Bounds(80.0, 0.0, 0.0, 80.0, 40.0, 1000.0), True),
+            FaceRecord(object(), Bounds(0.0, 0.0, 0.0, 80.0, 0.0, 1000.0), True),
+            FaceRecord(object(), Bounds(0.0, 40.0, 0.0, 80.0, 40.0, 1000.0), True),
+            FaceRecord(object(), Bounds(3.0, 3.0, 0.0, 3.0, 37.0, 1000.0), False),
+            FaceRecord(object(), Bounds(77.0, 3.0, 0.0, 77.0, 37.0, 1000.0), False),
+            FaceRecord(object(), Bounds(3.0, 3.0, 0.0, 77.0, 3.0, 1000.0), False),
+            FaceRecord(object(), Bounds(3.0, 37.0, 0.0, 77.0, 37.0, 1000.0), False),
+        )
+
+        estimate = estimate_wall_thickness(
+            faces,
+            (),
+            axis="Z",
+            length_mm=1000.0,
+            global_bounds=global_bounds,
+            tolerance=0.01,
+        )
+
+        self.assertEqual(estimate.thickness_mm, 3.0)
+        self.assertEqual(estimate.method, "плоские стенки наружный/внутренний контур")
+        self.assertEqual(estimate.confidence, "высокая")
+
+    def test_wall_thickness_uses_round_radii_when_cylinders_are_reliable(self) -> None:
+        faces = (
+            FaceRecord(
+                FakeCylinderFace(50.0),
+                Bounds(-50.0, -50.0, 0.0, 50.0, 50.0, 1000.0),
+                True,
+            ),
+            FaceRecord(
+                FakeCylinderFace(47.0),
+                Bounds(-47.0, -47.0, 0.0, 47.0, 47.0, 1000.0),
+                False,
+            ),
+        )
+
+        estimate = estimate_wall_thickness(
+            faces,
+            (),
+            axis="Z",
+            length_mm=1000.0,
+            global_bounds=Bounds(-50.0, -50.0, 0.0, 50.0, 50.0, 1000.0),
+            tolerance=0.01,
+        )
+
+        self.assertEqual(estimate.thickness_mm, 3.0)
+        self.assertEqual(estimate.method, "цилиндры R_outer - R_inner")
+        self.assertEqual(estimate.confidence, "высокая")
+
+    def test_manual_wall_thickness_override_wins(self) -> None:
+        estimate = estimate_wall_thickness(
+            (),
+            (),
+            axis="Z",
+            length_mm=1000.0,
+            global_bounds=Bounds(0.0, 0.0, 0.0, 80.0, 40.0, 1000.0),
+            tolerance=0.01,
+            manual_wall_thickness_mm=4.2,
+        )
+
+        self.assertEqual(estimate.thickness_mm, 4.2)
+        self.assertEqual(estimate.method, "ручной ввод")
+        self.assertEqual(estimate.confidence, "высокая")
+
+    def test_debug_edges_csv_lists_each_edge_and_inclusion_reason(self) -> None:
+        from pathlib import Path
+        from tempfile import TemporaryDirectory
+
+        cut_edge = EdgeRecord(
+            edge=object(),
+            length_mm=30.0,
+            edge_type=CUT_FEATURE,
+            reason="CUT_FEATURE inner contour",
+        )
+        ignored_edge = EdgeRecord(
+            edge=object(),
+            length_mm=1000.0,
+            edge_type=IGNORED_LONGITUDINAL,
+            reason="ignored longitudinal tube edge",
+        )
+        classification = EdgeClassificationResult(
+            cut_edges=(cut_edge,),
+            all_edge_count=2,
+            outer_face_count=1,
+            calculated_cut_edges=(cut_edge,),
+            ignored_longitudinal_edges=(ignored_edge,),
+            edge_records=(cut_edge, ignored_edge),
+        )
+
+        with TemporaryDirectory() as temp_dir:
+            target = Path(temp_dir) / "debug_edges.csv"
+            write_debug_edges_csv(classification, target, source_file="part.step")
+            content = target.read_text(encoding="utf-8-sig")
+
+        self.assertIn("source_file,edge_index,length_mm,edge_type,included_in_cut", content)
+        self.assertIn("part.step,1,30.000000,CUT_FEATURE,yes", content)
+        self.assertIn("part.step,2,1000.000000,IGNORED_LONGITUDINAL,no", content)
 
     def test_thickness_face_candidate_requires_outer_touch(self) -> None:
         outer_face = FaceRecord(

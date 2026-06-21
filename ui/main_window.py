@@ -6,6 +6,7 @@ from PySide6.QtCore import QThread, Qt
 from PySide6.QtGui import QDragEnterEvent, QDragLeaveEvent, QDragMoveEvent, QDropEvent
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QCheckBox,
     QFileDialog,
     QFormLayout,
     QFrame,
@@ -165,24 +166,50 @@ class MainWindow(QMainWindow):
         self.param_profile = QLabel("—")
         self.param_length = QLabel("—")
         self.param_thickness = QLabel("—")
+        self.param_thickness_method = QLabel("—")
+        self.param_thickness_confidence = QLabel("—")
         self.param_cut = QLabel("—")
+        self.param_cut_end = QLabel("—")
+        self.param_cut_feature = QLabel("—")
         self.param_diagnostic_cut = QLabel("—")
         self.param_pierces = QLabel("—")
         self.param_ignored_longitudinal = QLabel("—")
+        self.param_ignored_plane_radius = QLabel("—")
         self.param_auxiliary_unfold = QLabel("—")
+        self.param_debug_edges = QLabel("—")
         self.param_price = QLabel("—")
         params_layout.addRow("Файл", self.param_name)
         params_layout.addRow("Статус", self.param_status)
         params_layout.addRow("Тип трубы", self.param_profile)
         params_layout.addRow("Длина", self.param_length)
         params_layout.addRow("Толщина", self.param_thickness)
+        params_layout.addRow("Метод толщины", self.param_thickness_method)
+        params_layout.addRow("Confidence толщины", self.param_thickness_confidence)
         params_layout.addRow("Реальный рез", self.param_cut)
+        params_layout.addRow("Торцевые резы", self.param_cut_end)
+        params_layout.addRow("Вырезы/пазы", self.param_cut_feature)
         params_layout.addRow("Диагн. сумма ребер", self.param_diagnostic_cut)
         params_layout.addRow("Врезки", self.param_pierces)
         params_layout.addRow("Игнор. продольные", self.param_ignored_longitudinal)
+        params_layout.addRow("Игнор. плоскость/радиус", self.param_ignored_plane_radius)
         params_layout.addRow("Вспом. линии", self.param_auxiliary_unfold)
+        params_layout.addRow("debug_edges.csv", self.param_debug_edges)
         params_layout.addRow("Стоимость", self.param_price)
         layout.addWidget(params_group)
+
+        geometry_group = QGroupBox("Анализ")
+        geometry_layout = QFormLayout(geometry_group)
+        self.manual_thickness_checkbox = QCheckBox("Ручная толщина")
+        self.manual_thickness_input = QDoubleSpinBox()
+        self.manual_thickness_input.setRange(0.0, 1000.0)
+        self.manual_thickness_input.setDecimals(3)
+        self.manual_thickness_input.setSingleStep(0.5)
+        self.manual_thickness_input.setSuffix(" мм")
+        self.manual_thickness_input.setEnabled(False)
+        self.debug_edges_checkbox = QCheckBox("debug_edges.csv")
+        geometry_layout.addRow(self.manual_thickness_checkbox, self.manual_thickness_input)
+        geometry_layout.addRow(self.debug_edges_checkbox)
+        layout.addWidget(geometry_group)
 
         settings_group = QGroupBox("Настройки цен")
         settings_layout = QFormLayout(settings_group)
@@ -287,6 +314,7 @@ class MainWindow(QMainWindow):
         self.file_table.itemSelectionChanged.connect(self._sync_from_table_selection)
         self.compact_list.currentRowChanged.connect(self._sync_from_compact_selection)
         self.geometry_debug_button.clicked.connect(self._open_geometry_debugger)
+        self.manual_thickness_checkbox.toggled.connect(self.manual_thickness_input.setEnabled)
 
     def _choose_files(self) -> None:
         paths, _ = QFileDialog.getOpenFileNames(
@@ -383,11 +411,17 @@ class MainWindow(QMainWindow):
             job.tube_type = PLACEHOLDER
             job.tube_length_mm = PLACEHOLDER
             job.wall_thickness_mm = PLACEHOLDER
+            job.wall_thickness_method = PLACEHOLDER
+            job.wall_thickness_confidence = PLACEHOLDER
             job.cut_length_mm = PLACEHOLDER
+            job.cut_end_length_mm = PLACEHOLDER
+            job.cut_feature_length_mm = PLACEHOLDER
             job.diagnostic_edge_length_mm = PLACEHOLDER
             job.pierce_count = PLACEHOLDER
             job.ignored_longitudinal_edges = PLACEHOLDER
+            job.ignored_plane_radius_edges = PLACEHOLDER
             job.auxiliary_unfold_edges = PLACEHOLDER
+            job.debug_edges_path = ""
             job.price = PLACEHOLDER
             job.error_text = ""
             job.warnings.clear()
@@ -400,7 +434,16 @@ class MainWindow(QMainWindow):
         self._refresh_jobs()
 
         self.import_thread = QThread(self)
-        self.import_worker = CadImportWorker([Path(job.normalized_path) for job in import_jobs])
+        manual_thickness = (
+            self.manual_thickness_input.value()
+            if self.manual_thickness_checkbox.isChecked()
+            else None
+        )
+        self.import_worker = CadImportWorker(
+            [Path(job.normalized_path) for job in import_jobs],
+            manual_wall_thickness_mm=manual_thickness,
+            debug_edges_enabled=self.debug_edges_checkbox.isChecked(),
+        )
         self.import_worker.moveToThread(self.import_thread)
         self.import_thread.started.connect(self.import_worker.run)
         self.import_worker.progress.connect(self._on_import_progress)
@@ -434,7 +477,22 @@ class MainWindow(QMainWindow):
         job.tube_type = getattr(geometry_analysis, "profile_hint", str(file_format))
         job.tube_length_mm = self._format_analysis_length(geometry_analysis)
         job.wall_thickness_mm = self._format_wall_thickness(geometry_analysis)
+        job.wall_thickness_method = str(
+            getattr(geometry_analysis, "wall_thickness_method", PLACEHOLDER) or PLACEHOLDER
+        )
+        job.wall_thickness_confidence = str(
+            getattr(geometry_analysis, "wall_thickness_confidence", PLACEHOLDER)
+            or PLACEHOLDER
+        )
         job.cut_length_mm = self._format_cut_length(geometry_analysis)
+        job.cut_end_length_mm = self._format_length_field(
+            geometry_analysis,
+            "cut_end_length_mm",
+        )
+        job.cut_feature_length_mm = self._format_length_field(
+            geometry_analysis,
+            "cut_feature_length_mm",
+        )
         job.diagnostic_edge_length_mm = self._format_diagnostic_edge_length(
             geometry_analysis
         )
@@ -443,10 +501,15 @@ class MainWindow(QMainWindow):
             geometry_analysis,
             "ignored_longitudinal_edge_count",
         )
+        job.ignored_plane_radius_edges = self._format_count(
+            geometry_analysis,
+            "ignored_plane_radius_edge_count",
+        )
         job.auxiliary_unfold_edges = self._format_count(
             geometry_analysis,
             "auxiliary_unfold_edge_count",
         )
+        job.debug_edges_path = str(getattr(geometry_analysis, "debug_edges_path", "") or "")
         job.price = self._format_price(geometry_analysis)
         job.error_text = ""
         job.warnings = [
@@ -522,11 +585,16 @@ class MainWindow(QMainWindow):
             f"граней: {getattr(analysis, 'face_count', 0)}, "
             f"ребер: {getattr(analysis, 'edge_count', 0)}; "
             f"толщина: {getattr(analysis, 'wall_thickness_mm', 0.0):.1f} мм, "
+            f"метод толщины: {getattr(analysis, 'wall_thickness_method', '—')}, "
+            f"confidence: {getattr(analysis, 'wall_thickness_confidence', '—')}, "
             f"ребер реза: {getattr(analysis, 'cut_edge_count', 0)}, "
             f"реальный рез: {getattr(analysis, 'cut_length_mm', 0.0):.1f} мм, "
+            f"торцы: {getattr(analysis, 'cut_end_length_mm', 0.0):.1f} мм, "
+            f"вырезы/пазы: {getattr(analysis, 'cut_feature_length_mm', 0.0):.1f} мм, "
             f"диагн. сумма ребер: {getattr(analysis, 'diagnostic_edge_length_mm', 0.0):.1f} мм, "
             f"врезок: {getattr(analysis, 'pierce_count', 0)}, "
             f"игнор. продольных: {getattr(analysis, 'ignored_longitudinal_edge_count', 0)}, "
+            f"игнор. плоскость/радиус: {getattr(analysis, 'ignored_plane_radius_edge_count', 0)}, "
             f"вспом. линий: {getattr(analysis, 'auxiliary_unfold_edge_count', 0)}."
         )
 
@@ -541,6 +609,12 @@ class MainWindow(QMainWindow):
         if cut_length <= 0.0:
             return PLACEHOLDER
         return f"{cut_length:.1f} мм"
+
+    def _format_length_field(self, analysis: object, field_name: str) -> str:
+        length = float(getattr(analysis, field_name, 0.0))
+        if length <= 0.0:
+            return PLACEHOLDER
+        return f"{length:.1f} мм"
 
     def _format_diagnostic_edge_length(self, analysis: object) -> str:
         length = float(getattr(analysis, "diagnostic_edge_length_mm", 0.0))
@@ -663,7 +737,7 @@ class MainWindow(QMainWindow):
             )
 
         if job is None:
-            values = ["—"] * 11
+            values = ["—"] * 17
             warnings = "—"
         else:
             values = [
@@ -672,11 +746,17 @@ class MainWindow(QMainWindow):
                 job.tube_type,
                 job.tube_length_mm,
                 job.wall_thickness_mm,
+                job.wall_thickness_method,
+                job.wall_thickness_confidence,
                 job.cut_length_mm,
+                job.cut_end_length_mm,
+                job.cut_feature_length_mm,
                 job.diagnostic_edge_length_mm,
                 job.pierce_count,
                 job.ignored_longitudinal_edges,
+                job.ignored_plane_radius_edges,
                 job.auxiliary_unfold_edges,
+                job.debug_edges_path or "—",
                 job.price,
             ]
             warnings = "\n".join(job.warnings) if job.warnings else "—"
@@ -687,11 +767,17 @@ class MainWindow(QMainWindow):
             self.param_profile,
             self.param_length,
             self.param_thickness,
+            self.param_thickness_method,
+            self.param_thickness_confidence,
             self.param_cut,
+            self.param_cut_end,
+            self.param_cut_feature,
             self.param_diagnostic_cut,
             self.param_pierces,
             self.param_ignored_longitudinal,
+            self.param_ignored_plane_radius,
             self.param_auxiliary_unfold,
+            self.param_debug_edges,
             self.param_price,
         ]
         for label, value in zip(labels, values, strict=True):
@@ -716,7 +802,16 @@ class MainWindow(QMainWindow):
         summary = self.shape_summaries.get(job.normalized_path)
         analysis = self.shape_analyses.get(job.normalized_path)
         if analysis is None:
-            analysis = analyze_shape(shape, summary=summary)
+            manual_thickness = (
+                self.manual_thickness_input.value()
+                if self.manual_thickness_checkbox.isChecked()
+                else None
+            )
+            analysis = analyze_shape(
+                shape,
+                summary=summary,
+                manual_wall_thickness_mm=manual_thickness,
+            )
             self.shape_analyses[job.normalized_path] = analysis
 
         if self.geometry_debug_dialog is None:

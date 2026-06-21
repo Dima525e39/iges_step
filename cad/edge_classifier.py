@@ -12,6 +12,7 @@ CUT_END = "CUT_END"
 AUXILIARY_UNFOLD = "AUXILIARY_UNFOLD"
 IGNORED_LONGITUDINAL = "IGNORED_LONGITUDINAL"
 IGNORED_PROFILE = "IGNORED_PROFILE"
+IGNORED_PLANE_RADIUS = "IGNORED_PLANE_RADIUS"
 UNCERTAIN = "UNCERTAIN"
 CALCULATED_CUT_TYPES = {CUT_FEATURE, CUT_END}
 
@@ -97,11 +98,20 @@ class ThicknessFaceRecord:
 
 
 @dataclass(slots=True)
+class ThicknessEstimate:
+    thickness_mm: float = 0.0
+    method: str = "не определена"
+    confidence: str = "низкая"
+    warnings: tuple[str, ...] = ()
+
+
+@dataclass(slots=True)
 class EdgeGroups:
     calculated_cut_edges: tuple[EdgeRecord, ...] = ()
     auxiliary_unfold_edges: tuple[EdgeRecord, ...] = ()
     ignored_longitudinal_edges: tuple[EdgeRecord, ...] = ()
     ignored_profile_edges: tuple[EdgeRecord, ...] = ()
+    ignored_plane_radius_edges: tuple[EdgeRecord, ...] = ()
     uncertain_edges: tuple[EdgeRecord, ...] = ()
 
 
@@ -119,8 +129,15 @@ class EdgeClassificationResult:
     auxiliary_unfold_edges: tuple[EdgeRecord, ...] = ()
     ignored_longitudinal_edges: tuple[EdgeRecord, ...] = ()
     ignored_profile_edges: tuple[EdgeRecord, ...] = ()
+    ignored_plane_radius_edges: tuple[EdgeRecord, ...] = ()
     uncertain_edges: tuple[EdgeRecord, ...] = ()
     diagnostic_edge_length_mm: float = 0.0
+    edge_records: tuple[EdgeRecord, ...] = ()
+    wall_thickness_method: str = "не определена"
+    wall_thickness_confidence: str = "низкая"
+    length_axis: str = "Z"
+    global_bounds: Bounds | None = None
+    tolerance: float = 0.01
 
     @property
     def cut_edge_count(self) -> int:
@@ -149,12 +166,32 @@ class EdgeClassificationResult:
         return len(self.ignored_profile_edges)
 
     @property
+    def ignored_plane_radius_edge_count(self) -> int:
+        return len(self.ignored_plane_radius_edges)
+
+    @property
     def auxiliary_unfold_edge_count(self) -> int:
         return len(self.auxiliary_unfold_edges)
 
     @property
     def uncertain_edge_count(self) -> int:
         return len(self.uncertain_edges)
+
+    @property
+    def cut_feature_edges(self) -> tuple[EdgeRecord, ...]:
+        return tuple(edge for edge in self._active_cut_edges if edge.edge_type == CUT_FEATURE)
+
+    @property
+    def cut_end_edges(self) -> tuple[EdgeRecord, ...]:
+        return tuple(edge for edge in self._active_cut_edges if edge.edge_type == CUT_END)
+
+    @property
+    def cut_feature_length_mm(self) -> float:
+        return sum(edge.length_mm for edge in self.cut_feature_edges)
+
+    @property
+    def cut_end_length_mm(self) -> float:
+        return sum(edge.length_mm for edge in self.cut_end_edges)
 
     @property
     def _active_cut_edges(self) -> tuple[EdgeRecord, ...]:
@@ -172,8 +209,14 @@ class EdgeClassifier:
         *,
         summary: ShapeSummary,
         length_axis: str,
+        manual_wall_thickness_mm: float | None = None,
     ) -> EdgeClassificationResult:
-        return classify_cut_edges(shape, summary=summary, length_axis=length_axis)
+        return classify_cut_edges(
+            shape,
+            summary=summary,
+            length_axis=length_axis,
+            manual_wall_thickness_mm=manual_wall_thickness_mm,
+        )
 
 
 def classify_cut_edges(
@@ -181,6 +224,7 @@ def classify_cut_edges(
     *,
     summary: ShapeSummary,
     length_axis: str,
+    manual_wall_thickness_mm: float | None = None,
 ) -> EdgeClassificationResult:
     if shape is None:
         return EdgeClassificationResult(
@@ -249,13 +293,29 @@ def classify_cut_edges(
         global_bounds=global_bounds,
         tolerance=tolerance,
     )
-    wall_thickness_mm = _median(
-        tuple(face.thickness_mm for face in thickness_faces if face.thickness_mm > tolerance)
+    thickness_estimate = estimate_wall_thickness(
+        face_records,
+        edge_records,
+        axis=axis,
+        length_mm=length_mm,
+        global_bounds=global_bounds,
+        tolerance=tolerance,
+        manual_wall_thickness_mm=manual_wall_thickness_mm,
     )
+    wall_thickness_mm = thickness_estimate.thickness_mm
     if wall_thickness_mm > tolerance:
         for face in thickness_faces:
             face.thickness_mm = wall_thickness_mm
             face.cut_length_mm = face.area_mm2 / wall_thickness_mm
+    warnings.extend(thickness_estimate.warnings)
+    if wall_thickness_mm <= tolerance:
+        warnings.append(
+            "Толщина трубы не определена надежно; задайте ручную толщину в интерфейсе."
+        )
+    elif thickness_estimate.confidence != "высокая":
+        warnings.append(
+            "Толщина трубы определена с невысокой уверенностью; при необходимости задайте ее вручную."
+        )
 
     warnings.append(
         "Длина реза считается только по ребрам CUT_FEATURE и CUT_END; "
@@ -275,8 +335,15 @@ def classify_cut_edges(
         auxiliary_unfold_edges=groups.auxiliary_unfold_edges,
         ignored_longitudinal_edges=groups.ignored_longitudinal_edges,
         ignored_profile_edges=groups.ignored_profile_edges,
+        ignored_plane_radius_edges=groups.ignored_plane_radius_edges,
         uncertain_edges=groups.uncertain_edges,
         diagnostic_edge_length_mm=sum(edge.length_mm for edge in edge_records),
+        edge_records=tuple(edge_records),
+        wall_thickness_method=thickness_estimate.method,
+        wall_thickness_confidence=thickness_estimate.confidence,
+        length_axis=axis,
+        global_bounds=global_bounds,
+        tolerance=tolerance,
     )
 
 
@@ -468,6 +535,226 @@ def _estimate_face_thickness(
     if non_zero_sizes:
         return non_zero_sizes[0]
     return 0.0
+
+
+def estimate_wall_thickness(
+    face_records: Iterable[FaceRecord],
+    edge_records: Iterable[EdgeRecord],
+    *,
+    axis: str,
+    length_mm: float,
+    global_bounds: Bounds,
+    tolerance: float,
+    manual_wall_thickness_mm: float | None = None,
+) -> ThicknessEstimate:
+    manual = float(manual_wall_thickness_mm or 0.0)
+    if manual > tolerance:
+        return ThicknessEstimate(
+            thickness_mm=manual,
+            method="ручной ввод",
+            confidence="высокая",
+        )
+
+    faces = tuple(face_records)
+    round_estimate = _estimate_round_tube_thickness(
+        faces,
+        axis=axis,
+        length_mm=length_mm,
+        tolerance=tolerance,
+    )
+    if round_estimate.thickness_mm > tolerance and round_estimate.confidence == "высокая":
+        return round_estimate
+
+    flat_estimate = _estimate_flat_wall_thickness(
+        faces,
+        axis=axis,
+        length_mm=length_mm,
+        global_bounds=global_bounds,
+        tolerance=tolerance,
+    )
+    if flat_estimate.thickness_mm > tolerance:
+        return flat_estimate
+
+    if round_estimate.thickness_mm > tolerance:
+        return round_estimate
+
+    return ThicknessEstimate(
+        warnings=("Не удалось найти надежную пару наружного и внутреннего контура для толщины.",)
+    )
+
+
+def _estimate_round_tube_thickness(
+    face_records: tuple[FaceRecord, ...],
+    *,
+    axis: str,
+    length_mm: float,
+    tolerance: float,
+) -> ThicknessEstimate:
+    radii = sorted(
+        radius
+        for face in face_records
+        if _looks_like_longitudinal_inner_wall(
+            face.bounds,
+            axis=axis,
+            length_mm=length_mm,
+            tolerance=tolerance,
+        )
+        or face.is_outer_longitudinal
+        for radius in (_cylinder_radius(face.face),)
+        if radius is not None and radius > tolerance
+    )
+    distinct = _distinct_sorted(radii, tolerance=tolerance)
+    if len(distinct) < 2:
+        return ThicknessEstimate()
+
+    outer_radius = distinct[-1]
+    inner_radius = distinct[-2]
+    thickness = outer_radius - inner_radius
+    if thickness <= tolerance:
+        return ThicknessEstimate()
+
+    confidence = "высокая" if len(distinct) == 2 else "средняя"
+    warnings: tuple[str, ...] = ()
+    if confidence != "высокая":
+        warnings = ("Найдено больше двух цилиндрических радиусов; толщина круглой трубы требует проверки.",)
+    return ThicknessEstimate(
+        thickness_mm=thickness,
+        method="цилиндры R_outer - R_inner",
+        confidence=confidence,
+        warnings=warnings,
+    )
+
+
+def _estimate_flat_wall_thickness(
+    face_records: tuple[FaceRecord, ...],
+    *,
+    axis: str,
+    length_mm: float,
+    global_bounds: Bounds,
+    tolerance: float,
+) -> ThicknessEstimate:
+    sections = [
+        section
+        for face in face_records
+        for section in (_flat_wall_section(face, axis=axis, length_mm=length_mm, global_bounds=global_bounds, tolerance=tolerance),)
+        if section is not None
+    ]
+    outer_sections = [section for section in sections if section["is_outer"]]
+    inner_sections = [section for section in sections if not section["is_outer"]]
+    values: list[float] = []
+
+    for outer in outer_sections:
+        candidates: list[float] = []
+        for inner in inner_sections:
+            if inner["cross_index"] != outer["cross_index"]:
+                continue
+            if inner["side"] != outer["side"]:
+                continue
+            if outer["side"] == "min":
+                value = inner["coord"] - outer["coord"]
+            else:
+                value = outer["coord"] - inner["coord"]
+            if value > tolerance:
+                candidates.append(value)
+        if candidates:
+            values.append(min(candidates))
+
+    if not values:
+        return ThicknessEstimate()
+
+    thickness = _median(tuple(values))
+    spread = (max(values) - min(values)) if len(values) > 1 else 0.0
+    relative_spread = spread / thickness if thickness > tolerance else 1.0
+    if len(values) >= 2 and relative_spread <= 0.15:
+        confidence = "высокая"
+    elif relative_spread <= 0.30:
+        confidence = "средняя"
+    else:
+        confidence = "низкая"
+
+    warnings: tuple[str, ...] = ()
+    if confidence != "высокая":
+        warnings = (
+            "Толщина профильной трубы по плоским стенкам имеет разброс; проверьте или задайте вручную.",
+        )
+    return ThicknessEstimate(
+        thickness_mm=thickness,
+        method="плоские стенки наружный/внутренний контур",
+        confidence=confidence,
+        warnings=warnings,
+    )
+
+
+def _flat_wall_section(
+    face: FaceRecord,
+    *,
+    axis: str,
+    length_mm: float,
+    global_bounds: Bounds,
+    tolerance: float,
+) -> dict[str, object] | None:
+    if length_mm <= tolerance:
+        return None
+    axis_index = AXIS_INDEX[axis]
+    if face.bounds.sizes[axis_index] < max(length_mm * 0.45, tolerance):
+        return None
+
+    flat_tolerance = max(tolerance * 2.0, 0.05)
+    cross_indexes = [index for index in range(3) if index != axis_index]
+    constant_indexes = [
+        index for index in cross_indexes if face.bounds.sizes[index] <= flat_tolerance
+    ]
+    if len(constant_indexes) != 1:
+        return None
+
+    cross_index = constant_indexes[0]
+    coord = (face.bounds.mins[cross_index] + face.bounds.maxes[cross_index]) / 2.0
+    global_min = global_bounds.mins[cross_index]
+    global_max = global_bounds.maxes[cross_index]
+    side = "min" if abs(coord - global_min) <= abs(coord - global_max) else "max"
+    is_outer = (
+        abs(coord - global_min) <= flat_tolerance
+        or abs(coord - global_max) <= flat_tolerance
+        or face.is_outer_longitudinal
+    )
+    return {
+        "cross_index": cross_index,
+        "coord": coord,
+        "side": side,
+        "is_outer": is_outer,
+    }
+
+
+def _cylinder_radius(face: object) -> float | None:
+    attr_radius = getattr(face, "radius_mm", None)
+    if attr_radius is None:
+        attr_radius = getattr(face, "radius", None)
+    if attr_radius is not None:
+        try:
+            return float(attr_radius)
+        except (TypeError, ValueError):
+            return None
+
+    try:
+        from OCC.Core.BRepAdaptor import BRepAdaptor_Surface
+        from OCC.Core.GeomAbs import GeomAbs_Cylinder
+
+        surface = BRepAdaptor_Surface(face)
+        if surface.GetType() != GeomAbs_Cylinder:
+            return None
+        cylinder = surface.Cylinder()
+        return float(cylinder.Radius())
+    except Exception:
+        return None
+
+
+def _distinct_sorted(values: Iterable[float], *, tolerance: float) -> tuple[float, ...]:
+    distinct: list[float] = []
+    for value in sorted(values):
+        if distinct and abs(value - distinct[-1]) <= tolerance:
+            continue
+        distinct.append(value)
+    return tuple(distinct)
 
 
 def _count_thickness_face_components(
@@ -738,6 +1025,7 @@ def _classify_edge_groups(
     calculated_cut_edges: list[EdgeRecord] = []
     ignored_longitudinal_edges: list[EdgeRecord] = []
     ignored_profile_edges: list[EdgeRecord] = []
+    ignored_plane_radius_edges: list[EdgeRecord] = []
     uncertain_edges: list[EdgeRecord] = []
 
     for edge in edges:
@@ -758,6 +1046,8 @@ def _classify_edge_groups(
             ignored_longitudinal_edges.append(edge)
         elif edge_type == IGNORED_PROFILE:
             ignored_profile_edges.append(edge)
+        elif edge_type == IGNORED_PLANE_RADIUS:
+            ignored_plane_radius_edges.append(edge)
         elif edge_type == UNCERTAIN:
             uncertain_edges.append(edge)
 
@@ -765,6 +1055,7 @@ def _classify_edge_groups(
         calculated_cut_edges=tuple(calculated_cut_edges),
         ignored_longitudinal_edges=tuple(ignored_longitudinal_edges),
         ignored_profile_edges=tuple(ignored_profile_edges),
+        ignored_plane_radius_edges=tuple(ignored_plane_radius_edges),
         uncertain_edges=tuple(uncertain_edges),
     )
 
@@ -780,6 +1071,12 @@ def _classify_single_edge(
 ) -> tuple[str, str]:
     if edge.length_mm <= tolerance:
         return "", "zero length"
+
+    if (
+        _looks_like_longitudinal_seam(edge, axis=axis, length_mm=length_mm)
+        and edge.outer_face_count >= 2
+    ):
+        return IGNORED_PLANE_RADIUS, "ignored plane/radius transition line"
 
     if _looks_like_longitudinal_seam(edge, axis=axis, length_mm=length_mm):
         return IGNORED_LONGITUDINAL, "ignored longitudinal tube edge"

@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 
 from cad.analyzer import GeometryAnalysisResult, analyze_shape
 from cad.cut_length_calculator import CutLengthCalculator
+from cad.debug_edges import write_debug_edges_csv
 from cad.edge_classifier import EdgeClassifier, classify_cut_edges
 from cad.pierce_counter import PierceCounter, count_edge_components
 
@@ -39,6 +40,10 @@ print(result.to_text())
 #
 # Пример: получить словарь для быстрой проверки полей
 # print(result.as_dict())
+#
+# Пример: сохранить CSV по каждому 3D B-Rep ребру:
+# edges = classify_cut_edges(shape, summary=summary, length_axis=result.length_axis)
+# write_debug_edges_csv(edges, "debug_edges.csv", source_file=job.normalized_path)
 """
 
 
@@ -143,6 +148,7 @@ class GeometryDebugDialog(QDialog):
             "analyze_shape": analyze_shape,
             "classify_cut_edges": classify_cut_edges,
             "count_edge_components": count_edge_components,
+            "write_debug_edges_csv": write_debug_edges_csv,
             "CutLengthCalculator": CutLengthCalculator,
             "EdgeClassifier": EdgeClassifier,
             "PierceCounter": PierceCounter,

@@ -14,9 +14,17 @@ class CadImportWorker(QObject):
     failed = Signal(str, str)
     finished = Signal()
 
-    def __init__(self, paths: list[str | Path]) -> None:
+    def __init__(
+        self,
+        paths: list[str | Path],
+        *,
+        manual_wall_thickness_mm: float | None = None,
+        debug_edges_enabled: bool = False,
+    ) -> None:
         super().__init__()
         self.paths = [str(path) for path in paths]
+        self.manual_wall_thickness_mm = manual_wall_thickness_mm
+        self.debug_edges_enabled = debug_edges_enabled
 
     @Slot()
     def run(self) -> None:
@@ -25,10 +33,19 @@ class CadImportWorker(QObject):
             try:
                 result = importer.import_file(path)
                 summary = summarize_shape(result.shape)
+                source_path = Path(path)
+                debug_edges_path = (
+                    source_path.with_name("debug_edges.csv")
+                    if self.debug_edges_enabled
+                    else None
+                )
                 analysis = analyze_shape(
                     result.shape,
                     summary=summary,
                     file_format=result.file_format,
+                    manual_wall_thickness_mm=self.manual_wall_thickness_mm,
+                    debug_edges_path=debug_edges_path,
+                    source_path=source_path,
                 )
             except Exception as exc:
                 message = str(exc).strip() or exc.__class__.__name__
