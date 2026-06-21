@@ -27,18 +27,21 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
 
-      - name: Set up Miniforge
-        uses: conda-incubator/setup-miniconda@v3
-        with:
-          miniforge-version: latest
-          auto-activate-base: false
-          use-mamba: true
-
       - name: Apply patch and publish v0.4.7
         shell: bash
         run: |
           set -euo pipefail
-          cat .codex-patches/v047.patch.gz.b64.part* | base64 -d | gzip -dc > /tmp/v047.patch
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('.codex-patches/v047.patch.gz.b64.part00')
+          s = p.read_text(encoding='ascii')
+          if len(s) == 5999 and s[1235:1250] == '6e5eqYgcrm+x94j':
+              s = s[:1242] + 'G' + s[1242:]
+              p.write_text(s, encoding='ascii')
+          print(f'part00 length: {len(s)}')
+          PY
+          cat .codex-patches/v047.patch.gz.b64.part* | base64 --decode --ignore-garbage | gzip -dc > /tmp/v047.patch
+          git apply --check /tmp/v047.patch
           git apply --whitespace=nowarn /tmp/v047.patch
           rm -rf .codex-patches .github/workflows/apply-v047.yml
           git config user.name "github-actions[bot]"
@@ -47,6 +50,13 @@ jobs:
           git status --short
           git commit -m "Rework B-Rep cut analysis core"
           git push
+
+      - name: Set up Miniforge
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          miniforge-version: latest
+          auto-activate-base: false
+          use-mamba: true
 
       - name: Build EXE
         shell: cmd
