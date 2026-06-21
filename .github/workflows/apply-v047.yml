@@ -1,0 +1,82 @@
+name: Apply v0.4.7 patch and build
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".codex-patches/v047.patch.gz.b64.part*"
+      - ".github/workflows/apply-v047.yml"
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  apply-build:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: windows-latest
+    steps:
+      - name: Disable Git line ending conversion
+        shell: bash
+        run: git config --global core.autocrlf false
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Set up Miniforge
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          miniforge-version: latest
+          auto-activate-base: false
+          use-mamba: true
+
+      - name: Apply patch and publish v0.4.7
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .codex-patches/v047.patch.gz.b64.part* | base64 -d | gzip -dc > /tmp/v047.patch
+          git apply --whitespace=nowarn /tmp/v047.patch
+          rm -rf .codex-patches .github/workflows/apply-v047.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git status --short
+          git commit -m "Rework B-Rep cut analysis core"
+          git push
+
+      - name: Build EXE
+        shell: cmd
+        run: build_exe.bat
+
+      - name: Verify build output
+        shell: cmd
+        run: |
+          dir /S dist
+          if not exist dist\TubeCutCalculator.exe exit /b 1
+          if not exist dist\version.txt exit /b 1
+
+      - name: Smoke test packaged imports
+        shell: pwsh
+        run: |
+          $logPath = "dist\self-test-imports.txt"
+          $process = Start-Process -FilePath ".\dist\TubeCutCalculator.exe" -ArgumentList @("--self-test-imports", "--self-test-output", $logPath) -Wait -PassThru
+          if (Test-Path $logPath) { Get-Content $logPath }
+          if ($process.ExitCode -ne 0) { exit $process.ExitCode }
+
+      - name: Package Windows build
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force package | Out-Null
+          & "C:\Program Files\7-Zip\7z.exe" a -t7z -mx=9 package\TubeCutCalculator-v0.4.7-windows.7z dist\TubeCutCalculator.exe dist\version.txt
+          Get-ChildItem -Recurse package
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: TubeCutCalculator-windows-${{ github.run_number }}
+          if-no-files-found: error
+          path: package/*.7z
