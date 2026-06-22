@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import QCheckBox, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from core.file_job import FileJob
@@ -52,6 +52,7 @@ class Viewer3D(QWidget):
         self.label.setWordWrap(True)
 
         self.layers_panel = QWidget()
+        self.layers_panel.setObjectName("LayersPanel")
         layers_layout = QHBoxLayout(self.layers_panel)
         layers_layout.setContentsMargins(6, 4, 6, 4)
         self.cut_lines_layer = QCheckBox("Линии реза")
@@ -98,12 +99,36 @@ class Viewer3D(QWidget):
             self._display.EraseAll()
             self._display.DisplayShape(shape, update=True)
             self._disable_selection_mode()
-            self._display.FitAll()
             self.label.hide()
             self._canvas.show()
+            # The canvas is created lazily and may not have its final size yet
+            # when the first shape is displayed, so a single FitAll() here would
+            # frame the model against a tiny viewport and render it minuscule.
+            # Fit immediately and again after the layout settles.
+            self._fit_view()
+            QTimer.singleShot(0, self._fit_view)
+            QTimer.singleShot(120, self._fit_view)
         except Exception as exc:
             name = f"{title}\n" if title else ""
             self.show_message(f"{name}Не удалось показать 3D-модель:\n{exc}")
+
+    def _fit_view(self) -> None:
+        if self._display is None or self._canvas is None or not self._canvas.isVisible():
+            return
+        try:
+            self._display.FitAll()
+            view = getattr(self._display, "View", None)
+            if view is not None and hasattr(view, "ZFitAll"):
+                view.ZFitAll()
+        except Exception:
+            pass
+
+    def resizeEvent(self, event: object) -> None:
+        super().resizeEvent(event)
+        # Re-frame the model when the viewer is resized (e.g. the window is
+        # maximised) so it always fills the available space.
+        if self._canvas is not None and self._canvas.isVisible():
+            QTimer.singleShot(0, self._fit_view)
 
     def show_message(self, message: str) -> None:
         if self._canvas is not None:
