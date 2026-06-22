@@ -1441,15 +1441,42 @@ def _is_outer_longitudinal_face(
 ) -> bool:
     axis_index = AXIS_INDEX[axis]
     spans = bounds.sizes
-    if length_mm > 0 and spans[axis_index] < max(length_mm * 0.45, tolerance):
+    # End-cap / cross-plane faces (axial extent ~ 0) never belong to the skin.
+    if spans[axis_index] <= tolerance:
         return False
 
     cross_indexes = [index for index in range(3) if index != axis_index]
-    return any(
-        abs(bounds.mins[index] - global_bounds.mins[index]) <= tolerance
-        or abs(bounds.maxes[index] - global_bounds.maxes[index]) <= tolerance
+    # Flatness is an absolute property (a planar wall coincides with the
+    # envelope to within numerical noise), so it must not scale with tube
+    # length the way the position tolerance does — otherwise a thin cut wall on
+    # a long tube would be mistaken for outer skin.
+    flat_tol = 0.1
+    corner_band = max(global_bounds.sizes[index] for index in cross_indexes) * 0.20
+
+    touched = [
+        index
         for index in cross_indexes
-    )
+        if abs(bounds.mins[index] - global_bounds.mins[index]) <= tolerance
+        or abs(bounds.maxes[index] - global_bounds.maxes[index]) <= tolerance
+    ]
+    if not touched:
+        return False
+
+    # Outer skin runs *along* the axis and lies parallel to the envelope, either
+    # as a flat wall (≈ zero extent perpendicular to the side it sits on) or as
+    # a corner-radius face hugging an envelope corner (small in both cross
+    # directions). A cut/thickness wall instead reaches inward by ~ the wall
+    # thickness, so its perpendicular extent is non-zero. This stays correct
+    # when mid-span features split a wall or fillet into short axial segments.
+    if any(spans[index] <= flat_tol for index in touched):
+        return True
+    if (
+        len(touched) >= 2
+        and spans[axis_index] > corner_band
+        and all(spans[index] <= corner_band for index in cross_indexes)
+    ):
+        return True
+    return False
 
 
 def _looks_like_longitudinal_seam(

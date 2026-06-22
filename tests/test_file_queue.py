@@ -23,6 +23,7 @@ from cad.edge_classifier import (
     _count_thickness_face_components,
     _estimate_face_thickness,
     _is_cut_edge_candidate,
+    _is_outer_longitudinal_face,
     _is_thickness_face_candidate,
     estimate_wall_thickness,
 )
@@ -279,6 +280,32 @@ class GeometryAnalyzerTests(unittest.TestCase):
         )
 
         self.assertEqual(estimate.pierce_count, 1)
+
+    def test_outer_longitudinal_face_uses_orientation_not_length_fraction(self) -> None:
+        # Envelope of a 25x25 tube, 1000 mm long along Z.
+        gb = Bounds(0.0, 0.0, 0.0, 25.0, 25.0, 1000.0)
+        kw = dict(axis="Z", length_mm=1000.0, global_bounds=gb, tolerance=0.5)
+
+        def outer(bounds: Bounds) -> bool:
+            return _is_outer_longitudinal_face(bounds, **kw)
+
+        # Flat wall segment on the X=25 face, short axially because features
+        # split it: still outer skin (≈0 extent perpendicular to the side).
+        self.assertTrue(outer(Bounds(25.0, 2.0, 400.0, 25.0, 22.0, 500.0)))
+        # Corner-radius face hugging the x+/y+ envelope corner, running along
+        # the axis: outer skin even though features split it into a segment.
+        self.assertTrue(outer(Bounds(22.75, 22.75, 100.0, 25.0, 25.0, 500.0)))
+
+        # Short cope corner at a tube end (tiny axial run) is NOT skin — it is a
+        # cut face and must stay available for pierce grouping.
+        self.assertFalse(outer(Bounds(22.75, 22.75, 0.0, 25.0, 25.0, 2.0)))
+        # A cut/thickness wall reaches inward by the wall thickness (~1.5 mm),
+        # so its perpendicular extent is non-zero -> not outer skin.
+        self.assertFalse(outer(Bounds(23.5, 10.0, 400.0, 25.0, 14.0, 404.0)))
+        # End-cap (axial extent ~0) is never longitudinal skin.
+        self.assertFalse(outer(Bounds(0.0, 0.0, 0.0, 25.0, 25.0, 0.0)))
+        # Inner wall does not touch the outer envelope.
+        self.assertFalse(outer(Bounds(2.0, 2.0, 0.0, 2.0, 22.0, 1000.0)))
 
     def test_cut_edge_candidate_accepts_outer_cut_face_boundary(self) -> None:
         outer_face = FaceRecord(
