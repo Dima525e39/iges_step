@@ -1,3 +1,3 @@
-TubeCutCalculator v0.4.10
-Build date: 2026-06-21
-Description: Calculator UI, light/dark theme, contractors/materials/pricing settings, tube purchase calculation, Excel/PDF export, print dialogs, project save/load, and existing 3D B-Rep cut analysis.
+TubeCutCalculator v0.4.11
+Build date: 2026-06-22
+Description: Corrected cut length and pierce count on real IGES tube parts, multi-plane cut grouping, IGES sewing on import, 3D viewer auto-fit, readable selectable side panel and visible filter bar; calculator UI, themes, contractors/materials/pricing, tube purchase, Excel/PDF export, print, project save/load, 3D B-Rep cut analysis.
