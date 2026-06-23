@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 from cad.sheet_analyzer import SheetAnalysisResult, SheetContour, SheetPoint
@@ -38,7 +39,7 @@ class NestingPlacement:
     y_mm: float
     width_mm: float
     height_mm: float
-    rotation_deg: int
+    rotation_deg: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -126,6 +127,7 @@ class MaxRectsNestingEngine:
         sheet_height_mm: float,
         spacing_mm: float = 3.0,
         allow_rotation: bool = True,
+        rotation_step_degrees: float = 90.0,
     ) -> NestingLayout:
         warnings: list[str] = []
         sheet_width = max(1.0, float(sheet_width_mm))
@@ -144,6 +146,7 @@ class MaxRectsNestingEngine:
                     sheet_index=sheet_index,
                     spacing_mm=spacing,
                     allow_rotation=allow_rotation,
+                    rotation_step_degrees=rotation_step_degrees,
                 )
                 if placement is None or used_rect is None:
                     continue
@@ -166,6 +169,7 @@ class MaxRectsNestingEngine:
                 sheet_index=sheet_index,
                 spacing_mm=spacing,
                 allow_rotation=allow_rotation,
+                rotation_step_degrees=rotation_step_degrees,
             )
             if placement is None or used_rect is None:
                 warnings.append(
@@ -230,10 +234,9 @@ def _find_best_position(
     sheet_index: int,
     spacing_mm: float,
     allow_rotation: bool,
+    rotation_step_degrees: float,
 ) -> tuple[NestingPlacement | None, _Rect | None]:
-    options = [(0, part.width_mm, part.height_mm)]
-    if allow_rotation and abs(part.width_mm - part.height_mm) > 0.001:
-        options.append((90, part.height_mm, part.width_mm))
+    options = _rotation_options(part, allow_rotation=allow_rotation, step_degrees=rotation_step_degrees)
 
     best: tuple[tuple[float, float, float, float], NestingPlacement, _Rect] | None = None
     for rotation, width, height in options:
@@ -318,12 +321,73 @@ def _contains(outer: _Rect, inner: _Rect) -> bool:
 
 
 def _transform_point(point: SheetPoint, placement: NestingPlacement) -> SheetPoint:
-    if placement.rotation_deg == 90:
+    if abs(placement.rotation_deg) > 0.001:
+        bounds = _rotated_bounds(
+            placement.part.width_mm,
+            placement.part.height_mm,
+            placement.rotation_deg,
+        )
+        radians = math.radians(placement.rotation_deg)
+        cos_angle = math.cos(radians)
+        sin_angle = math.sin(radians)
+        rotated_x = point.x_mm * cos_angle - point.y_mm * sin_angle
+        rotated_y = point.x_mm * sin_angle + point.y_mm * cos_angle
         return SheetPoint(
-            x_mm=placement.x_mm + point.y_mm,
-            y_mm=placement.y_mm + placement.part.width_mm - point.x_mm,
+            x_mm=placement.x_mm + rotated_x - bounds.x,
+            y_mm=placement.y_mm + rotated_y - bounds.y,
         )
     return SheetPoint(
         x_mm=placement.x_mm + point.x_mm,
         y_mm=placement.y_mm + point.y_mm,
     )
+
+
+def _rotation_options(
+    part: NestingPart,
+    *,
+    allow_rotation: bool,
+    step_degrees: float,
+) -> tuple[tuple[float, float, float], ...]:
+    if not allow_rotation:
+        return ((0.0, part.width_mm, part.height_mm),)
+
+    step = max(1.0, min(180.0, float(step_degrees or 90.0)))
+    angles: list[float] = []
+    angle = 0.0
+    while angle < 180.0 - 0.001:
+        angles.append(round(angle, 6))
+        angle += step
+    if not any(abs(angle - 90.0) <= 0.001 for angle in angles):
+        angles.append(90.0)
+
+    options: list[tuple[float, float, float]] = []
+    seen: set[tuple[int, int]] = set()
+    for angle in sorted(angles):
+        bounds = _rotated_bounds(part.width_mm, part.height_mm, angle)
+        key = (round(bounds.width * 1000), round(bounds.height * 1000))
+        if key in seen:
+            continue
+        seen.add(key)
+        options.append((angle, bounds.width, bounds.height))
+    return tuple(options)
+
+
+def _rotated_bounds(width: float, height: float, rotation_deg: float) -> _Rect:
+    radians = math.radians(rotation_deg)
+    cos_angle = math.cos(radians)
+    sin_angle = math.sin(radians)
+    points = (
+        (0.0, 0.0),
+        (width, 0.0),
+        (width, height),
+        (0.0, height),
+    )
+    rotated = tuple(
+        (x * cos_angle - y * sin_angle, x * sin_angle + y * cos_angle)
+        for x, y in points
+    )
+    min_x = min(x for x, _ in rotated)
+    min_y = min(y for _, y in rotated)
+    max_x = max(x for x, _ in rotated)
+    max_y = max(y for _, y in rotated)
+    return _Rect(min_x, min_y, max_x - min_x, max_y - min_y)

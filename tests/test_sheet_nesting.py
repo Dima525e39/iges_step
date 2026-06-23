@@ -104,6 +104,40 @@ class SheetDxfAndNestingTests(unittest.TestCase):
         self.assertEqual(layout.sheet_count, 2)
         self.assertEqual(len(layout.placements), 3)
 
+    def test_nesting_uses_arbitrary_rotation_step(self) -> None:
+        analysis = build_sheet_analysis_from_contours(
+            (
+                SheetContour(
+                    points=(
+                        SheetPoint(0.0, 0.0),
+                        SheetPoint(120.0, 0.0),
+                        SheetPoint(120.0, 20.0),
+                        SheetPoint(0.0, 20.0),
+                        SheetPoint(0.0, 0.0),
+                    ),
+                    length_mm=280.0,
+                    component_id=1,
+                ),
+            ),
+            width_mm=120.0,
+            height_mm=20.0,
+            thickness_mm=2.0,
+        )
+
+        layout = MaxRectsNestingEngine().nest(
+            (NestingPart.from_sheet_analysis(name="long", analysis=analysis),),
+            sheet_width_mm=100.0,
+            sheet_height_mm=100.0,
+            spacing_mm=0.0,
+            allow_rotation=True,
+            rotation_step_degrees=45.0,
+        )
+
+        self.assertEqual(layout.sheet_count, 1)
+        self.assertAlmostEqual(layout.placements[0].rotation_deg, 45.0)
+        self.assertLessEqual(layout.placements[0].width_mm, 100.0)
+        self.assertLessEqual(layout.placements[0].height_mm, 100.0)
+
     def test_exports_sheet_svg_and_nesting_dxf(self) -> None:
         analysis = build_sheet_analysis_from_contours(
             (

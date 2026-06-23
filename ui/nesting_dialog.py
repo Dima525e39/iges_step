@@ -81,12 +81,18 @@ class NestingDialog(QDialog):
         self.spacing_input.setValue(3.0)
         self.spacing_input.setSuffix(" мм")
         self.spacing_input.setSingleStep(0.5)
-        self.rotate_checkbox = QCheckBox("Разрешить поворот 90°")
+        self.rotate_checkbox = QCheckBox("Разрешить поворот")
         self.rotate_checkbox.setChecked(True)
+        self.rotation_step_input = QDoubleSpinBox()
+        self.rotation_step_input.setRange(1.0, 90.0)
+        self.rotation_step_input.setValue(5.0)
+        self.rotation_step_input.setSuffix("°")
+        self.rotation_step_input.setSingleStep(1.0)
         form.addRow("Ширина листа", self.sheet_width_input)
         form.addRow("Высота листа", self.sheet_height_input)
         form.addRow("Зазор", self.spacing_input)
         form.addRow(self.rotate_checkbox)
+        form.addRow("Шаг угла", self.rotation_step_input)
         layout.addLayout(form)
 
         self.parts_list = QListWidget()
@@ -109,6 +115,7 @@ class NestingDialog(QDialog):
         self.calculate_button.clicked.connect(self._run_nesting)
         self.export_dxf_button.clicked.connect(self._export_dxf)
         self.export_svg_button.clicked.connect(self._export_svg)
+        self.rotate_checkbox.toggled.connect(self.rotation_step_input.setEnabled)
         return panel
 
     def _build_preview(self) -> QWidget:
@@ -144,6 +151,7 @@ class NestingDialog(QDialog):
             sheet_height_mm=self.sheet_height_input.value(),
             spacing_mm=self.spacing_input.value(),
             allow_rotation=self.rotate_checkbox.isChecked(),
+            rotation_step_degrees=self.rotation_step_input.value(),
         )
         self._render_layout(self.layout_result)
 
