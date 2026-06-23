@@ -9,6 +9,13 @@ from typing import Any
 
 from cad.supported_formats import is_supported_cad_file
 
+# IGES is a surface format: adjacent faces usually carry their own copy of the
+# shared boundary curve instead of a single common edge. Sewing rebuilds that
+# shared topology so cut-contour grouping (pierce counting) can tell that the
+# planes of one multi-plane cut belong together. The tolerance is the maximum
+# gap that is still treated as a coincident edge.
+IGES_SEW_TOLERANCE_MM = 0.01
+
 
 class CadImportError(RuntimeError):
     """Raised when a CAD file cannot be imported."""
@@ -109,4 +116,34 @@ class CadImporter:
             raise CadImportError("IGES-файл не удалось прочитать.")
 
         reader.TransferRoots()
-        return reader.OneShape()
+        return _sew_iges_shape(reader.OneShape())
+
+
+def _sew_iges_shape(shape: object) -> object:
+    """Sew free IGES surfaces into a shell with shared edges and vertices.
+
+    Returns the sewed shape on success, or the original shape unchanged on any
+    failure (missing dependency, untopologized input, OpenCascade error) so an
+    IGES import never regresses to an error because of healing.
+    """
+    if shape is None:
+        return shape
+
+    try:
+        from OCC.Core.BRepBuilderAPI import BRepBuilderAPI_Sewing
+
+        sewing = BRepBuilderAPI_Sewing(IGES_SEW_TOLERANCE_MM)
+        sewing.Add(shape)
+        sewing.Perform()
+        sewed = sewing.SewedShape()
+    except Exception:
+        return shape
+
+    if sewed is None:
+        return shape
+    try:
+        if sewed.IsNull():
+            return shape
+    except Exception:
+        return shape
+    return sewed

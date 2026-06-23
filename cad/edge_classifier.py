@@ -795,10 +795,21 @@ def _analyze_cut_faces(
     global_bounds: Bounds,
     tolerance: float,
 ) -> CutFaceAnalysis:
+    records = tuple(records)
+    # Connectivity is grouped over *all* thickness faces, not only the ones
+    # that carry an outer cut contour. A multi-plane cut (e.g. a 3-plane notch)
+    # can have an internal facet that never reaches the outer skin; that facet
+    # owns no outer edge, yet it is the only thing joining its two outer
+    # neighbours. Excluding it before grouping would split a single pierce into
+    # two. We therefore compute components first, then keep only the faces that
+    # actually contribute an outer cut edge.
+    component_ids = _thickness_face_component_ids(records, tolerance=tolerance)
+
     selected_records: list[ThicknessFaceRecord] = []
+    selected_components: list[int] = []
     record_edges: list[tuple[EdgeRecord, ...]] = []
 
-    for record in records:
+    for index, record in enumerate(records):
         outer_edges = _outer_cut_edges_for_thickness_face(
             record,
             axis=axis,
@@ -808,19 +819,16 @@ def _analyze_cut_faces(
         if not outer_edges:
             continue
         selected_records.append(record)
+        selected_components.append(component_ids.get(index, 0))
         record_edges.append(outer_edges)
 
     if not selected_records:
         return CutFaceAnalysis()
 
-    component_ids = _thickness_face_component_ids(
-        tuple(selected_records),
-        tolerance=tolerance,
-    )
     cut_edges: list[EdgeRecord] = []
 
     for record_index, edges in enumerate(record_edges):
-        component_id = component_ids.get(record_index, 0)
+        component_id = selected_components[record_index]
         for edge in edges:
             existing = _find_same_edge(cut_edges, edge.edge)
             if existing is not None:
@@ -839,10 +847,12 @@ def _analyze_cut_faces(
             edge.cut_component_id = component_id
             cut_edges.append(edge)
 
+    # Count one pierce per connected group that surfaces on the outer skin.
+    pierce_count = len({component for component in selected_components if component > 0})
     return CutFaceAnalysis(
         cut_edges=tuple(cut_edges),
         cut_faces=tuple(selected_records),
-        pierce_count=len(set(component_ids.values())),
+        pierce_count=pierce_count,
     )
 
 
@@ -1431,15 +1441,42 @@ def _is_outer_longitudinal_face(
 ) -> bool:
     axis_index = AXIS_INDEX[axis]
     spans = bounds.sizes
-    if length_mm > 0 and spans[axis_index] < max(length_mm * 0.45, tolerance):
+    # End-cap / cross-plane faces (axial extent ~ 0) never belong to the skin.
+    if spans[axis_index] <= tolerance:
         return False
 
     cross_indexes = [index for index in range(3) if index != axis_index]
-    return any(
-        abs(bounds.mins[index] - global_bounds.mins[index]) <= tolerance
-        or abs(bounds.maxes[index] - global_bounds.maxes[index]) <= tolerance
+    # Flatness is an absolute property (a planar wall coincides with the
+    # envelope to within numerical noise), so it must not scale with tube
+    # length the way the position tolerance does — otherwise a thin cut wall on
+    # a long tube would be mistaken for outer skin.
+    flat_tol = 0.1
+    corner_band = max(global_bounds.sizes[index] for index in cross_indexes) * 0.20
+
+    touched = [
+        index
         for index in cross_indexes
-    )
+        if abs(bounds.mins[index] - global_bounds.mins[index]) <= tolerance
+        or abs(bounds.maxes[index] - global_bounds.maxes[index]) <= tolerance
+    ]
+    if not touched:
+        return False
+
+    # Outer skin runs *along* the axis and lies parallel to the envelope, either
+    # as a flat wall (≈ zero extent perpendicular to the side it sits on) or as
+    # a corner-radius face hugging an envelope corner (small in both cross
+    # directions). A cut/thickness wall instead reaches inward by ~ the wall
+    # thickness, so its perpendicular extent is non-zero. This stays correct
+    # when mid-span features split a wall or fillet into short axial segments.
+    if any(spans[index] <= flat_tol for index in touched):
+        return True
+    if (
+        len(touched) >= 2
+        and spans[axis_index] > corner_band
+        and all(spans[index] <= corner_band for index in cross_indexes)
+    ):
+        return True
+    return False
 
 
 def _looks_like_longitudinal_seam(

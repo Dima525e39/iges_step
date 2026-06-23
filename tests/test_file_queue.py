@@ -23,11 +23,12 @@ from cad.edge_classifier import (
     _count_thickness_face_components,
     _estimate_face_thickness,
     _is_cut_edge_candidate,
+    _is_outer_longitudinal_face,
     _is_thickness_face_candidate,
     estimate_wall_thickness,
 )
 from cad.debug_edges import write_debug_edges_csv
-from cad.importer import CadImportError, CadImporter
+from cad.importer import CadImportError, CadImporter, _sew_iges_shape
 from cad.pierce_counter import _count_components_from_pairs
 from cad.profile_detector import detect_profile_from_dimensions
 from cad.shape_summary import ShapeSummary
@@ -144,6 +145,56 @@ class CadImporterTests(unittest.TestCase):
             with CadImporter._path_for_opencascade(source) as read_path:
                 self.assertEqual(read_path, source)
 
+    def test_sew_iges_shape_returns_shape_unchanged_when_sewing_unavailable(self) -> None:
+        # When OpenCascade (or its sewing API) is not importable, healing must
+        # be a no-op that returns the original shape so import never regresses.
+        sentinel = object()
+        self.assertIs(_sew_iges_shape(sentinel), sentinel)
+
+    def test_sew_iges_shape_passes_none_through(self) -> None:
+        self.assertIsNone(_sew_iges_shape(None))
+
+    def test_sew_iges_shape_returns_sewed_result(self) -> None:
+        sewed_marker = object()
+
+        class FakeSewing:
+            def __init__(self, tolerance: float) -> None:
+                self.tolerance = tolerance
+                self.added: list[object] = []
+                self.performed = False
+
+            def Add(self, shape: object) -> None:
+                self.added.append(shape)
+
+            def Perform(self) -> None:
+                self.performed = True
+
+            def SewedShape(self) -> object:
+                return types.SimpleNamespace(IsNull=lambda: False, _marker=sewed_marker)
+
+        module_names = ["OCC", "OCC.Core", "OCC.Core.BRepBuilderAPI"]
+        originals = {name: sys.modules.get(name) for name in module_names}
+
+        occ_module = types.ModuleType("OCC")
+        core_module = types.ModuleType("OCC.Core")
+        builder_module = types.ModuleType("OCC.Core.BRepBuilderAPI")
+        builder_module.BRepBuilderAPI_Sewing = FakeSewing
+
+        try:
+            sys.modules["OCC"] = occ_module
+            sys.modules["OCC.Core"] = core_module
+            sys.modules["OCC.Core.BRepBuilderAPI"] = builder_module
+
+            result = _sew_iges_shape(object())
+        finally:
+            for name, original in originals.items():
+                if original is None:
+                    sys.modules.pop(name, None)
+                else:
+                    sys.modules[name] = original
+
+        self.assertIs(result._marker, sewed_marker)
+
     def test_count_topology_imports_top_exp_explorer_in_helper_scope(self) -> None:
         from cad.shape_summary import _count_topology
 
@@ -229,6 +280,32 @@ class GeometryAnalyzerTests(unittest.TestCase):
         )
 
         self.assertEqual(estimate.pierce_count, 1)
+
+    def test_outer_longitudinal_face_uses_orientation_not_length_fraction(self) -> None:
+        # Envelope of a 25x25 tube, 1000 mm long along Z.
+        gb = Bounds(0.0, 0.0, 0.0, 25.0, 25.0, 1000.0)
+        kw = dict(axis="Z", length_mm=1000.0, global_bounds=gb, tolerance=0.5)
+
+        def outer(bounds: Bounds) -> bool:
+            return _is_outer_longitudinal_face(bounds, **kw)
+
+        # Flat wall segment on the X=25 face, short axially because features
+        # split it: still outer skin (≈0 extent perpendicular to the side).
+        self.assertTrue(outer(Bounds(25.0, 2.0, 400.0, 25.0, 22.0, 500.0)))
+        # Corner-radius face hugging the x+/y+ envelope corner, running along
+        # the axis: outer skin even though features split it into a segment.
+        self.assertTrue(outer(Bounds(22.75, 22.75, 100.0, 25.0, 25.0, 500.0)))
+
+        # Short cope corner at a tube end (tiny axial run) is NOT skin — it is a
+        # cut face and must stay available for pierce grouping.
+        self.assertFalse(outer(Bounds(22.75, 22.75, 0.0, 25.0, 25.0, 2.0)))
+        # A cut/thickness wall reaches inward by the wall thickness (~1.5 mm),
+        # so its perpendicular extent is non-zero -> not outer skin.
+        self.assertFalse(outer(Bounds(23.5, 10.0, 400.0, 25.0, 14.0, 404.0)))
+        # End-cap (axial extent ~0) is never longitudinal skin.
+        self.assertFalse(outer(Bounds(0.0, 0.0, 0.0, 25.0, 25.0, 0.0)))
+        # Inner wall does not touch the outer envelope.
+        self.assertFalse(outer(Bounds(2.0, 2.0, 0.0, 2.0, 22.0, 1000.0)))
 
     def test_cut_edge_candidate_accepts_outer_cut_face_boundary(self) -> None:
         outer_face = FaceRecord(
@@ -713,6 +790,154 @@ class GeometryAnalyzerTests(unittest.TestCase):
         self.assertEqual(analysis.pierce_count, 1)
         self.assertEqual({edge.edge_type for edge in analysis.cut_edges}, {CUT_FEATURE})
         self.assertEqual({edge.cut_component_id for edge in analysis.cut_edges}, {1})
+
+    def test_three_plane_cut_with_internal_middle_face_is_one_pierce(self) -> None:
+        # A 3-plane notch where the middle (bottom) plane never reaches the
+        # outer skin. The two outer planes are connected only through that
+        # internal plane. Grouping must still report a single pierce instead of
+        # splitting the cut in two when the internal plane is dropped.
+        outer_face = FaceRecord(
+            face=object(),
+            bounds=Bounds(0.0, 0.0, 0.0, 80.0, 0.0, 1000.0),
+            is_outer_longitudinal=True,
+        )
+        left_face = FaceRecord(
+            face=object(),
+            bounds=Bounds(20.0, 0.0, 300.0, 30.0, 10.0, 330.0),
+            is_outer_longitudinal=False,
+        )
+        bottom_face = FaceRecord(
+            face=object(),
+            bounds=Bounds(30.0, 10.0, 300.0, 60.0, 13.0, 330.0),
+            is_outer_longitudinal=False,
+        )
+        right_face = FaceRecord(
+            face=object(),
+            bounds=Bounds(60.0, 0.0, 300.0, 70.0, 10.0, 330.0),
+            is_outer_longitudinal=False,
+        )
+        left_outer_edge = EdgeRecord(
+            edge=object(),
+            length_mm=30.0,
+            bounds=Bounds(20.0, 0.0, 300.0, 30.0, 0.0, 300.0),
+            faces=[outer_face, left_face],
+        )
+        right_outer_edge = EdgeRecord(
+            edge=object(),
+            length_mm=30.0,
+            bounds=Bounds(60.0, 0.0, 300.0, 70.0, 0.0, 300.0),
+            faces=[outer_face, right_face],
+        )
+        left_join = EdgeRecord(
+            edge=object(),
+            length_mm=3.0,
+            start_point=(30.0, 10.0, 300.0),
+            end_point=(30.0, 10.0, 330.0),
+            faces=[left_face, bottom_face],
+        )
+        right_join = EdgeRecord(
+            edge=object(),
+            length_mm=3.0,
+            start_point=(60.0, 10.0, 300.0),
+            end_point=(60.0, 10.0, 330.0),
+            faces=[bottom_face, right_face],
+        )
+        records = (
+            ThicknessFaceRecord(
+                face=left_face,
+                area_mm2=90.0,
+                thickness_mm=3.0,
+                cut_length_mm=30.0,
+                edges=(left_outer_edge, left_join),
+            ),
+            ThicknessFaceRecord(
+                face=bottom_face,
+                area_mm2=90.0,
+                thickness_mm=3.0,
+                cut_length_mm=30.0,
+                edges=(left_join, right_join),
+            ),
+            ThicknessFaceRecord(
+                face=right_face,
+                area_mm2=90.0,
+                thickness_mm=3.0,
+                cut_length_mm=30.0,
+                edges=(right_outer_edge, right_join),
+            ),
+        )
+
+        analysis = _analyze_cut_faces(
+            records,
+            axis="Z",
+            length_mm=1000.0,
+            global_bounds=Bounds(0.0, 0.0, 0.0, 80.0, 40.0, 1000.0),
+            tolerance=0.01,
+        )
+
+        # The internal bottom face carries no outer edge, so only the two outer
+        # planes contribute to the cut length, but both belong to one pierce.
+        self.assertEqual(analysis.cut_edges, (left_outer_edge, right_outer_edge))
+        self.assertEqual(sum(edge.length_mm for edge in analysis.cut_edges), 60.0)
+        self.assertEqual(analysis.pierce_count, 1)
+        self.assertEqual({edge.cut_component_id for edge in analysis.cut_edges}, {1})
+
+    def test_two_separate_cuts_remain_two_pierces(self) -> None:
+        # Guard against over-merging: two thickness faces that do not touch must
+        # stay two pierces.
+        outer_face = FaceRecord(
+            face=object(),
+            bounds=Bounds(0.0, 0.0, 0.0, 80.0, 0.0, 1000.0),
+            is_outer_longitudinal=True,
+        )
+        first_face = FaceRecord(
+            face=object(),
+            bounds=Bounds(20.0, 0.0, 200.0, 30.0, 3.0, 230.0),
+            is_outer_longitudinal=False,
+        )
+        second_face = FaceRecord(
+            face=object(),
+            bounds=Bounds(50.0, 0.0, 600.0, 60.0, 3.0, 630.0),
+            is_outer_longitudinal=False,
+        )
+        first_edge = EdgeRecord(
+            edge=object(),
+            length_mm=30.0,
+            bounds=Bounds(20.0, 0.0, 200.0, 30.0, 0.0, 200.0),
+            faces=[outer_face, first_face],
+        )
+        second_edge = EdgeRecord(
+            edge=object(),
+            length_mm=30.0,
+            bounds=Bounds(50.0, 0.0, 600.0, 60.0, 0.0, 600.0),
+            faces=[outer_face, second_face],
+        )
+        records = (
+            ThicknessFaceRecord(
+                face=first_face,
+                area_mm2=90.0,
+                thickness_mm=3.0,
+                cut_length_mm=30.0,
+                edges=(first_edge,),
+            ),
+            ThicknessFaceRecord(
+                face=second_face,
+                area_mm2=90.0,
+                thickness_mm=3.0,
+                cut_length_mm=30.0,
+                edges=(second_edge,),
+            ),
+        )
+
+        analysis = _analyze_cut_faces(
+            records,
+            axis="Z",
+            length_mm=1000.0,
+            global_bounds=Bounds(0.0, 0.0, 0.0, 80.0, 40.0, 1000.0),
+            tolerance=0.01,
+        )
+
+        self.assertEqual(analysis.pierce_count, 2)
+        self.assertEqual({edge.cut_component_id for edge in analysis.cut_edges}, {1, 2})
 
     def test_cut_edge_components_count_one_wrapped_cut_as_one_pierce(self) -> None:
         first = EdgeRecord(

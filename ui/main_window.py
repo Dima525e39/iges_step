@@ -181,14 +181,19 @@ class MainWindow(QMainWindow):
 
     def _build_right_panel(self) -> QWidget:
         outer_panel = QWidget()
-        outer_panel.setMinimumWidth(300)
-        outer_panel.setMaximumWidth(380)
+        outer_panel.setMinimumWidth(320)
+        outer_panel.setMaximumWidth(460)
         outer_layout = QVBoxLayout(outer_panel)
         outer_layout.setContentsMargins(0, 0, 0, 0)
 
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
         scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+        # Wrap long values within the panel instead of forcing a horizontal
+        # scrollbar that hides the text.
+        scroll_area.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
         outer_layout.addWidget(scroll_area)
 
         panel = QWidget()
@@ -196,26 +201,35 @@ class MainWindow(QMainWindow):
 
         params_group = QGroupBox("Параметры")
         params_layout = QFormLayout(params_group)
-        self.param_name = QLabel("—")
-        self.param_status = QLabel("—")
-        self.param_profile = QLabel("—")
-        self.param_length = QLabel("—")
-        self.param_thickness = QLabel("—")
-        self.param_thickness_method = QLabel("—")
-        self.param_thickness_confidence = QLabel("—")
-        self.param_cut = QLabel("—")
-        self.param_cut_end = QLabel("—")
-        self.param_cut_feature = QLabel("—")
-        self.param_diagnostic_cut = QLabel("—")
-        self.param_pierces = QLabel("—")
-        self.param_ignored_longitudinal = QLabel("—")
-        self.param_ignored_plane_radius = QLabel("—")
-        self.param_auxiliary_unfold = QLabel("—")
-        self.param_debug_edges = QLabel("—")
-        self.param_material = QLabel("—")
-        self.param_contractor = QLabel("—")
-        self.param_price_rule = QLabel("—")
-        self.param_price = QLabel("—")
+        # Wrap long rows under their label and let fields grow, so values stay
+        # fully readable inside the fixed-width side panel.
+        params_layout.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        params_layout.setFieldGrowthPolicy(
+            QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow
+        )
+        params_layout.setLabelAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
+        )
+        self.param_name = self._value_label()
+        self.param_status = self._value_label()
+        self.param_profile = self._value_label()
+        self.param_length = self._value_label()
+        self.param_thickness = self._value_label()
+        self.param_thickness_method = self._value_label()
+        self.param_thickness_confidence = self._value_label()
+        self.param_cut = self._value_label()
+        self.param_cut_end = self._value_label()
+        self.param_cut_feature = self._value_label()
+        self.param_diagnostic_cut = self._value_label()
+        self.param_pierces = self._value_label()
+        self.param_ignored_longitudinal = self._value_label()
+        self.param_ignored_plane_radius = self._value_label()
+        self.param_auxiliary_unfold = self._value_label()
+        self.param_debug_edges = self._value_label()
+        self.param_material = self._value_label()
+        self.param_contractor = self._value_label()
+        self.param_price_rule = self._value_label()
+        self.param_price = self._value_label()
         params_layout.addRow("Файл", self.param_name)
         params_layout.addRow("Статус", self.param_status)
         params_layout.addRow("Тип трубы", self.param_profile)
@@ -261,8 +275,7 @@ class MainWindow(QMainWindow):
 
         warnings_group = QGroupBox("Предупреждения")
         warnings_layout = QVBoxLayout(warnings_group)
-        self.warning_label = QLabel("—")
-        self.warning_label.setWordWrap(True)
+        self.warning_label = self._value_label()
         warnings_layout.addWidget(self.warning_label)
         layout.addWidget(warnings_group, stretch=1)
 
@@ -271,6 +284,15 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.geometry_debug_button)
         scroll_area.setWidget(panel)
         return outer_panel
+
+    def _value_label(self, text: str = "—") -> QLabel:
+        label = QLabel(text)
+        label.setWordWrap(True)
+        label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+            | Qt.TextInteractionFlag.TextSelectableByKeyboard
+        )
+        return label
 
     def _make_money_input(self, value: float) -> QDoubleSpinBox:
         spin_box = QDoubleSpinBox()

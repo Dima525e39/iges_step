@@ -77,6 +77,36 @@ QHeaderView::section {
     padding: 4px;
     border: 1px solid #d1d5db;
 }
+QTabBar::tab {
+    background: #e5e7eb;
+    color: #374151;
+    padding: 6px 14px;
+    border: 1px solid #d1d5db;
+    border-bottom: none;
+}
+QTabBar::tab:selected {
+    background: #ffffff;
+    color: #111827;
+    font-weight: 600;
+}
+QCheckBox {
+    color: #111827;
+    spacing: 6px;
+}
+QCheckBox:disabled {
+    color: #9ca3af;
+}
+#LayersPanel {
+    background: #e5e7eb;
+    border-bottom: 1px solid #d1d5db;
+}
+#LayersPanel QCheckBox {
+    color: #111827;
+    padding: 2px 6px;
+}
+QLabel {
+    color: #111827;
+}
 """
 
 
@@ -152,6 +182,36 @@ QHeaderView::section {
     color: #f9fafb;
     padding: 4px;
     border: 1px solid #3f4652;
+}
+QTabBar::tab {
+    background: #2f3540;
+    color: #cbd5e1;
+    padding: 6px 14px;
+    border: 1px solid #3f4652;
+    border-bottom: none;
+}
+QTabBar::tab:selected {
+    background: #181a1f;
+    color: #ffffff;
+    font-weight: 600;
+}
+QCheckBox {
+    color: #e5e7eb;
+    spacing: 6px;
+}
+QCheckBox:disabled {
+    color: #6b7280;
+}
+#LayersPanel {
+    background: #2f3540;
+    border-bottom: 1px solid #3f4652;
+}
+#LayersPanel QCheckBox {
+    color: #f9fafb;
+    padding: 2px 6px;
+}
+QLabel {
+    color: #e5e7eb;
 }
 """
 
