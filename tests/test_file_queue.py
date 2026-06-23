@@ -532,6 +532,32 @@ class GeometryAnalyzerTests(unittest.TestCase):
         self.assertEqual(estimate.method, "цилиндры R_outer - R_inner")
         self.assertEqual(estimate.confidence, "высокая")
 
+    def test_wall_thickness_normalizes_diameter_like_round_values(self) -> None:
+        faces = (
+            FaceRecord(
+                FakeCylinderFace(100.0),
+                Bounds(-50.0, -50.0, 0.0, 50.0, 50.0, 1000.0),
+                True,
+            ),
+            FaceRecord(
+                FakeCylinderFace(94.0),
+                Bounds(-47.0, -47.0, 0.0, 47.0, 47.0, 1000.0),
+                False,
+            ),
+        )
+
+        estimate = estimate_wall_thickness(
+            faces,
+            (),
+            axis="Z",
+            length_mm=1000.0,
+            global_bounds=Bounds(-50.0, -50.0, 0.0, 50.0, 50.0, 1000.0),
+            tolerance=0.01,
+        )
+
+        self.assertEqual(estimate.thickness_mm, 3.0)
+        self.assertEqual(estimate.method, "цилиндры R_outer - R_inner")
+
     def test_round_tube_uses_outer_cylindrical_face_loops(self) -> None:
         import cad.edge_classifier as edge_classifier
 
@@ -650,6 +676,46 @@ class GeometryAnalyzerTests(unittest.TestCase):
         self.assertEqual(analysis.pierce_count, 1)
         self.assertEqual(analysis.outer_radius_mm, 50.0)
         self.assertEqual(cut_edge.edge_type, CUT_FEATURE)
+
+    def test_round_tube_loop_analysis_normalizes_diameter_like_cylinder_value(self) -> None:
+        import cad.edge_classifier as edge_classifier
+
+        outer_face = FaceRecord(
+            FakeCylinderFace(100.0),
+            Bounds(-50.0, -50.0, 0.0, 50.0, 50.0, 1000.0),
+            True,
+        )
+        end_edge_shape = object()
+        end_edge = EdgeRecord(
+            edge=end_edge_shape,
+            length_mm=314.0,
+            bounds=Bounds(-50.0, -50.0, 0.0, 50.0, 50.0, 0.0),
+            faces=[outer_face],
+        )
+        original_collect_wire_records = edge_classifier._collect_wire_records
+
+        def fake_collect_wire_records(face_record, *, warnings):
+            if face_record is not outer_face:
+                return []
+            return [WireRecord(object(), face_record, (end_edge_shape,), 314.0)]
+
+        edge_classifier._collect_wire_records = fake_collect_wire_records
+        try:
+            analysis = _analyze_round_tube_outer_loops(
+                (outer_face,),
+                (end_edge,),
+                axis="Z",
+                length_mm=1000.0,
+                global_bounds=Bounds(-50.0, -50.0, 0.0, 50.0, 50.0, 1000.0),
+                tolerance=0.01,
+                warnings=[],
+            )
+        finally:
+            edge_classifier._collect_wire_records = original_collect_wire_records
+
+        self.assertEqual(analysis.cut_edges, (end_edge,))
+        self.assertEqual(analysis.outer_radius_mm, 50.0)
+        self.assertEqual(end_edge.edge_type, CUT_END)
 
     def test_round_tube_loop_analysis_keeps_edges_with_incomplete_adjacency(self) -> None:
         import cad.edge_classifier as edge_classifier

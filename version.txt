@@ -1,3 +1,3 @@
-TubeCutCalculator v0.5.1
+TubeCutCalculator v0.5.2
 Build date: 2026-06-24
-Description: Adds quantity-aware pricing/nesting, zoomable 2D/nesting previews, compatible nesting DXF export, debug_faces.csv, and round-tube edge fallback.
+Description: Fixes round-tube diameter/thickness normalization when CAD cylinder values are diameter-like; keeps v0.5.1 quantity, zoom, nesting DXF, debug_faces, and round fallback features.

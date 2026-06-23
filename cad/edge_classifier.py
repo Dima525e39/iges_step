@@ -649,6 +649,7 @@ def estimate_wall_thickness(
         faces,
         axis=axis,
         length_mm=length_mm,
+        global_bounds=global_bounds,
         tolerance=tolerance,
     )
     if round_estimate.thickness_mm > tolerance and round_estimate.confidence == "высокая":
@@ -677,8 +678,14 @@ def _estimate_round_tube_thickness(
     *,
     axis: str,
     length_mm: float,
+    global_bounds: Bounds,
     tolerance: float,
 ) -> ThicknessEstimate:
+    expected_outer_radius = _expected_round_outer_radius(
+        axis=axis,
+        global_bounds=global_bounds,
+        tolerance=tolerance,
+    )
     radii = sorted(
         radius
         for face in face_records
@@ -690,6 +697,13 @@ def _estimate_round_tube_thickness(
         )
         or face.is_outer_longitudinal
         for radius in (_cylinder_radius(face.face),)
+        for radius in (
+            _normalize_cylinder_radius(
+                radius,
+                expected_outer_radius=expected_outer_radius,
+                tolerance=tolerance,
+            ),
+        )
         if radius is not None and radius > tolerance
     )
     distinct = _distinct_sorted(radii, tolerance=tolerance)
@@ -942,26 +956,28 @@ def _round_tube_outer_radius(
     global_bounds: Bounds,
     tolerance: float,
 ) -> float:
-    axis_index = AXIS_INDEX[axis]
-    cross_sizes = [
-        global_bounds.sizes[index]
-        for index in range(3)
-        if index != axis_index
-    ]
-    if len(cross_sizes) != 2:
-        return 0.0
-    cross_min = min(cross_sizes)
-    cross_max = max(cross_sizes)
-    if cross_min <= tolerance or cross_min / cross_max < 0.75:
+    expected_radius = _expected_round_outer_radius(
+        axis=axis,
+        global_bounds=global_bounds,
+        tolerance=tolerance,
+    )
+    if expected_radius <= tolerance:
         return 0.0
 
-    expected_radius = (cross_min + cross_max) / 4.0
+    axis_index = AXIS_INDEX[axis]
     radius_tolerance = max(tolerance * 2.0, expected_radius * 0.12, 0.8)
     radii = sorted(
         radius
         for face in face_records
         if face.bounds.sizes[axis_index] >= max(length_mm * 0.02, tolerance)
         for radius in (_cylinder_radius(face.face),)
+        for radius in (
+            _normalize_cylinder_radius(
+                radius,
+                expected_outer_radius=expected_radius,
+                tolerance=tolerance,
+            ),
+        )
         if radius is not None and radius > tolerance
     )
     distinct = _distinct_sorted(radii, tolerance=tolerance)
@@ -983,6 +999,11 @@ def _is_round_outer_face_for_loop_sum(
     tolerance: float,
 ) -> bool:
     radius = _cylinder_radius(face_record.face)
+    radius = _normalize_cylinder_radius(
+        radius,
+        expected_outer_radius=outer_radius,
+        tolerance=tolerance,
+    )
     if radius is None:
         return False
     radius_tolerance = max(tolerance * 2.0, outer_radius * 0.08, 0.6)
@@ -991,6 +1012,47 @@ def _is_round_outer_face_for_loop_sum(
 
     axis_span = face_record.bounds.sizes[AXIS_INDEX[axis]]
     return axis_span >= max(length_mm * 0.02, tolerance)
+
+
+def _expected_round_outer_radius(
+    *,
+    axis: str,
+    global_bounds: Bounds,
+    tolerance: float,
+) -> float:
+    axis_index = AXIS_INDEX[axis]
+    cross_sizes = [
+        global_bounds.sizes[index]
+        for index in range(3)
+        if index != axis_index
+    ]
+    if len(cross_sizes) != 2:
+        return 0.0
+    cross_min = min(cross_sizes)
+    cross_max = max(cross_sizes)
+    if cross_min <= tolerance or cross_min / cross_max < 0.75:
+        return 0.0
+    return (cross_min + cross_max) / 4.0
+
+
+def _normalize_cylinder_radius(
+    radius: float | None,
+    *,
+    expected_outer_radius: float,
+    tolerance: float,
+) -> float | None:
+    if radius is None:
+        return None
+    radius = float(radius)
+    if expected_outer_radius <= tolerance:
+        return radius
+    radius_tolerance = max(tolerance * 2.0, expected_outer_radius * 0.12, 0.8)
+    if abs(radius - expected_outer_radius) <= radius_tolerance:
+        return radius
+    half_radius = radius / 2.0
+    if abs(half_radius - expected_outer_radius) <= radius_tolerance:
+        return half_radius
+    return radius
 
 
 def _round_outer_loop_cut_edges(
