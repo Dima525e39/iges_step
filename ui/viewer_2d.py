@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QRectF, Qt
-from PySide6.QtGui import QBrush, QColor, QFont, QPainter, QPen
+from PySide6.QtGui import QBrush, QColor, QFont, QPen
 from PySide6.QtWidgets import (
     QGraphicsScene,
-    QGraphicsView,
     QLabel,
     QVBoxLayout,
     QWidget,
@@ -14,6 +13,7 @@ from cad.shape_summary import summarize_shape
 from cad.sheet_analyzer import SheetAnalysisResult
 from cad.unfolder import UnfoldingPreview, build_unfolding_preview
 from core.file_job import FileJob
+from ui.zoom_graphics_view import ZoomGraphicsView
 
 
 class Viewer2D(QWidget):
@@ -24,9 +24,7 @@ class Viewer2D(QWidget):
         self.header.setObjectName("Viewer2DHeader")
 
         self.scene = QGraphicsScene(self)
-        self.view = QGraphicsView(self.scene)
-        self.view.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        self.view.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
+        self.view = ZoomGraphicsView(self.scene)
         self.view.setBackgroundBrush(QBrush(QColor("#f8fafc")))
 
         layout = QVBoxLayout(self)
@@ -241,10 +239,7 @@ class Viewer2D(QWidget):
         self._fit_scene()
 
     def _fit_scene(self) -> None:
-        self.view.fitInView(
-            self.scene.sceneRect().adjusted(-8.0, -8.0, 8.0, 8.0),
-            Qt.AspectRatioMode.KeepAspectRatio,
-        )
+        self.view.fit_scene()
 
 
 def _longest_axis(summary: object) -> str:

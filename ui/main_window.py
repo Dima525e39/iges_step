@@ -369,6 +369,8 @@ class MainWindow(QMainWindow):
         self.nesting_button.clicked.connect(self._open_nesting)
         self.drop_area.pathsDropped.connect(self._add_paths)
         self.file_table.pathsDropped.connect(self._add_paths)
+        self.file_table.quantityChanged.connect(self._on_job_quantity_changed)
+        self.diagnostic_table.quantityChanged.connect(self._on_job_quantity_changed)
         self.file_table.itemSelectionChanged.connect(self._sync_from_table_selection)
         self.diagnostic_table.itemSelectionChanged.connect(self._sync_from_diagnostic_selection)
         self.compact_list.currentRowChanged.connect(self._sync_from_compact_selection)
@@ -524,6 +526,7 @@ class MainWindow(QMainWindow):
             job.ignored_plane_radius_edges = PLACEHOLDER
             job.auxiliary_unfold_edges = PLACEHOLDER
             job.debug_edges_path = ""
+            job.debug_faces_path = ""
             job.price = PLACEHOLDER
             job.price_warning = ""
             job.error_text = ""
@@ -614,6 +617,7 @@ class MainWindow(QMainWindow):
             "auxiliary_unfold_edge_count",
         )
         job.debug_edges_path = str(getattr(geometry_analysis, "debug_edges_path", "") or "")
+        job.debug_faces_path = str(getattr(geometry_analysis, "debug_faces_path", "") or "")
         self._update_job_price(job, geometry_analysis)
         job.error_text = ""
         job.warnings = [
@@ -712,6 +716,7 @@ class MainWindow(QMainWindow):
         cut_length = float(getattr(analysis, "cut_length_mm", 0.0) or 0.0)
         pierce_count = int(getattr(analysis, "pierce_count", 0) or 0)
         thickness = float(getattr(analysis, "wall_thickness_mm", 0.0) or 0.0)
+        quantity = max(1, int(getattr(job, "quantity", 1) or 1))
         if cut_length <= 0.0 and pierce_count <= 0:
             job.price = PLACEHOLDER
             job.price_warning = ""
@@ -724,7 +729,7 @@ class MainWindow(QMainWindow):
             cut_length_mm=cut_length,
             pierce_count=pierce_count,
         )
-        job.price = f"{result.total:.2f}"
+        job.price = f"{result.total * quantity:.2f}"
         job.currency = result.currency
         job.price_warning = result.selection.warning
 
@@ -840,12 +845,28 @@ class MainWindow(QMainWindow):
         jobs = self.queue.jobs()
         imported = sum(1 for job in jobs if job.status == STATUS_IMPORTED)
         failed = sum(1 for job in jobs if job.status == STATUS_ERROR)
+        quantity_total = sum(max(1, int(getattr(job, "quantity", 1) or 1)) for job in jobs)
         total = sum(number_from_text(job.price) for job in jobs)
         currency = next((job.currency for job in jobs if job.currency), "руб.")
         self.summary_label.setText(
             f"Файлов: {len(jobs)} | Успешно: {imported} | Ошибок: {failed} | "
-            f"Итого: {total:.2f} {currency}"
+            f"Деталей: {quantity_total} | Итого: {total:.2f} {currency}"
         )
+
+    def _on_job_quantity_changed(self, path: str, quantity: int) -> None:
+        job = self.queue.get(path)
+        if job is None:
+            return
+        job.quantity = max(1, int(quantity))
+        analysis = self.shape_analyses.get(job.normalized_path)
+        if analysis is not None:
+            old_warning = job.price_warning
+            if old_warning:
+                job.warnings = [warning for warning in job.warnings if warning != old_warning]
+            self._update_job_price(job, analysis)
+            if job.price_warning and job.price_warning not in job.warnings:
+                job.warnings.append(job.price_warning)
+        self._refresh_jobs()
 
     def _refresh_compact_list(self, jobs: list[FileJob]) -> None:
         current_path = None

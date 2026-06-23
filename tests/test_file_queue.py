@@ -17,6 +17,7 @@ from cad.edge_classifier import (
     FaceRecord,
     ThicknessFaceRecord,
     _analyze_cut_faces,
+    _analyze_round_tube_edge_fallback,
     _analyze_round_tube_outer_loops,
     _classify_edge_groups,
     _collect_thickness_outer_cut_edges,
@@ -714,6 +715,37 @@ class GeometryAnalyzerTests(unittest.TestCase):
 
         self.assertEqual(analysis.cut_edges, ())
         self.assertEqual(analysis.pierce_count, 0)
+
+    def test_round_tube_edge_fallback_counts_without_outer_faces(self) -> None:
+        end_edge = EdgeRecord(
+            edge=object(),
+            length_mm=314.0,
+            bounds=Bounds(-50.0, -50.0, 0.0, 50.0, 50.0, 0.0),
+        )
+        feature_edge = EdgeRecord(
+            edge=object(),
+            length_mm=40.0,
+            bounds=Bounds(0.0, -50.0, 400.0, 20.0, -50.0, 420.0),
+        )
+        longitudinal_edge = EdgeRecord(
+            edge=object(),
+            length_mm=1000.0,
+            bounds=Bounds(50.0, 0.0, 0.0, 50.0, 0.0, 1000.0),
+        )
+
+        analysis = _analyze_round_tube_edge_fallback(
+            (end_edge, feature_edge, longitudinal_edge),
+            axis="Z",
+            length_mm=1000.0,
+            global_bounds=Bounds(-50.0, -50.0, 0.0, 50.0, 50.0, 1000.0),
+            has_outer_faces=False,
+            tolerance=0.01,
+        )
+
+        self.assertEqual(analysis.cut_edges, (end_edge, feature_edge))
+        self.assertEqual(analysis.pierce_count, 2)
+        self.assertEqual(end_edge.edge_type, CUT_END)
+        self.assertEqual(feature_edge.edge_type, CUT_FEATURE)
 
     def test_manual_wall_thickness_override_wins(self) -> None:
         estimate = estimate_wall_thickness(

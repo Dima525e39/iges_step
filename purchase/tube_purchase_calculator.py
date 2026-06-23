@@ -61,7 +61,11 @@ def calculate_tube_purchase(
             if material.standard_stock_length_mm > 0.0
             else purchase_settings.standard_stock_length_mm
         )
-        lengths = [number_from_text(job.tube_length_mm) for job in group.jobs]
+        lengths = [
+            number_from_text(job.tube_length_mm)
+            for job in group.jobs
+            for _ in range(max(1, int(getattr(job, "quantity", 1) or 1)))
+        ]
         result = calculate_stock_lengths(
             StockLengthInput(
                 detail_lengths_mm=lengths,

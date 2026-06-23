@@ -133,7 +133,9 @@ class SheetDxfAndNestingTests(unittest.TestCase):
             svg_path = export_sheet_svg(analysis, Path(temp_dir) / "part.svg")
             dxf_path = export_nesting_dxf(layout, Path(temp_dir) / "nesting.dxf")
             self.assertIn("<polyline", svg_path.read_text(encoding="utf-8"))
-            self.assertIn("LWPOLYLINE", dxf_path.read_text(encoding="utf-8"))
+            dxf_text = dxf_path.read_text(encoding="utf-8")
+            self.assertIn("LINE", dxf_text)
+            self.assertIn("CUT", dxf_text)
 
 
 if __name__ == "__main__":

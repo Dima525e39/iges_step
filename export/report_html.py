@@ -89,6 +89,7 @@ def _details_table(jobs: list[FileJob], *, technical: bool = False) -> str:
         "Длина",
         "Длина реза",
         "Врезки",
+        "Количество",
         "Цена",
     ]
     if technical:
@@ -103,6 +104,7 @@ def _details_table(jobs: list[FileJob], *, technical: bool = False) -> str:
             job.tube_length_mm,
             job.cut_length_mm,
             job.pierce_count,
+            str(job.quantity),
             job.formatted_price,
         ]
         if technical:

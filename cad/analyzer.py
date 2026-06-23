@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from cad.debug_faces import write_debug_faces_csv
 from cad.debug_edges import write_debug_edges_csv
 from cad.edge_classifier import classify_cut_edges
 from cad.importer import CadImporter
@@ -44,6 +45,7 @@ class GeometryAnalysisResult:
     auxiliary_unfold_edge_count: int = 0
     uncertain_edge_count: int = 0
     debug_edges_path: str = ""
+    debug_faces_path: str = ""
     warnings: tuple[str, ...] = ()
     sheet_analysis: SheetAnalysisResult | None = None
 
@@ -88,6 +90,8 @@ class GeometryAnalysisResult:
             )
         if self.debug_edges_path:
             lines.append(f"debug_edges.csv: {self.debug_edges_path}")
+        if self.debug_faces_path:
+            lines.append(f"debug_faces.csv: {self.debug_faces_path}")
         if self.warnings:
             lines.append("Предупреждения:")
             lines.extend(f"- {warning}" for warning in self.warnings)
@@ -166,6 +170,7 @@ def analyze_shape(
     auxiliary_unfold_edge_count = 0
     uncertain_edge_count = 0
     written_debug_edges_path = ""
+    written_debug_faces_path = ""
     if min(sizes.values()) <= 0.0:
         warnings.append("Один из габаритов равен нулю; модель может быть поверхностной.")
     if solid_count == 0 and shell_count > 0:
@@ -234,6 +239,7 @@ def analyze_shape(
             auxiliary_unfold_edge_count=auxiliary_unfold_edge_count,
             uncertain_edge_count=uncertain_edge_count,
             debug_edges_path=written_debug_edges_path,
+            debug_faces_path=written_debug_faces_path,
             warnings=tuple(warnings),
             sheet_analysis=sheet_analysis,
         )
@@ -280,8 +286,16 @@ def analyze_shape(
                     tolerance=classification.tolerance,
                 )
                 written_debug_edges_path = str(debug_path)
+                faces_path = debug_path.with_name("debug_faces.csv")
+                written_debug_faces_path = str(
+                    write_debug_faces_csv(
+                        classification,
+                        faces_path,
+                        length_axis=classification.length_axis,
+                    )
+                )
             except Exception as exc:
-                warnings.append(f"debug_edges.csv не записан: {exc}")
+                warnings.append(f"debug CSV не записан: {exc}")
         if classification.pierce_count is None:
             warnings.extend(pierce_estimate.warnings)
         if cut_length_mm > 0.0:
@@ -321,6 +335,7 @@ def analyze_shape(
         auxiliary_unfold_edge_count=auxiliary_unfold_edge_count,
         uncertain_edge_count=uncertain_edge_count,
         debug_edges_path=written_debug_edges_path,
+        debug_faces_path=written_debug_faces_path,
         warnings=tuple(warnings),
         sheet_analysis=sheet_analysis,
     )

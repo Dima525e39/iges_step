@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import QRectF, Qt
-from PySide6.QtGui import QBrush, QColor, QFont, QPainter, QPen
+from PySide6.QtGui import QBrush, QColor, QFont, QPen
 from PySide6.QtWidgets import (
     QCheckBox,
     QDialog,
@@ -11,7 +11,6 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFormLayout,
     QGraphicsScene,
-    QGraphicsView,
     QHBoxLayout,
     QLabel,
     QListWidget,
@@ -25,6 +24,7 @@ from PySide6.QtWidgets import (
 from core.file_job import FileJob
 from export.vector_exporter import export_nesting_dxf, export_nesting_svg
 from nesting.core import MaxRectsNestingEngine, NestingLayout, NestingPart, transformed_contours
+from ui.zoom_graphics_view import ZoomGraphicsView
 
 
 class NestingDialog(QDialog):
@@ -41,6 +41,7 @@ class NestingDialog(QDialog):
             NestingPart.from_sheet_analysis(
                 name=job.name,
                 analysis=getattr(analysis, "sheet_analysis"),
+                quantity=max(1, int(getattr(job, "quantity", 1) or 1)),
             )
             for job, analysis in jobs
             if getattr(analysis, "sheet_analysis", None) is not None
@@ -113,19 +114,23 @@ class NestingDialog(QDialog):
     def _build_preview(self) -> QWidget:
         panel = QWidget()
         layout = QVBoxLayout(panel)
+        toolbar = QHBoxLayout()
+        self.fit_view_button = QPushButton("Вписать")
+        toolbar.addStretch(1)
+        toolbar.addWidget(self.fit_view_button)
+        layout.addLayout(toolbar)
         self.scene = QGraphicsScene(self)
-        self.view = QGraphicsView(self.scene)
-        self.view.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        self.view.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
+        self.view = ZoomGraphicsView(self.scene)
         self.view.setBackgroundBrush(QBrush(QColor("#f8fafc")))
         layout.addWidget(self.view)
+        self.fit_view_button.clicked.connect(self.view.fit_scene)
         return panel
 
     def _refresh_part_list(self) -> None:
         self.parts_list.clear()
         for part in self.parts:
             self.parts_list.addItem(
-                f"{part.name} | {part.width_mm:.1f} x {part.height_mm:.1f} мм"
+                f"{part.name} | {part.width_mm:.1f} x {part.height_mm:.1f} мм | x{part.quantity}"
             )
 
     def _run_nesting(self) -> None:
@@ -213,10 +218,7 @@ class NestingDialog(QDialog):
             f"Листов: {layout.sheet_count}; деталей: {len(layout.placements)}"
             + (f"\n{warnings}" if warnings else "")
         )
-        self.view.fitInView(
-            self.scene.sceneRect().adjusted(-8.0, -8.0, 8.0, 8.0),
-            Qt.AspectRatioMode.KeepAspectRatio,
-        )
+        self.view.fit_scene()
 
     def _export_dxf(self) -> None:
         layout = self._ensure_layout()

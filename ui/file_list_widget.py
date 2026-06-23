@@ -11,6 +11,7 @@ from ui.drop_helpers import local_paths_from_mime_data
 
 class FileListWidget(QTableWidget):
     pathsDropped = Signal(list)
+    quantityChanged = Signal(str, int)
 
     HEADERS = [
         "Файл",
@@ -18,6 +19,7 @@ class FileListWidget(QTableWidget):
         "Длина",
         "Длина реза",
         "Врезки",
+        "Количество",
         "Цена",
         "Материал",
         "Контрагент",
@@ -44,8 +46,10 @@ class FileListWidget(QTableWidget):
         "Игнор. продольные",
         "Игнор. плоскость/радиус",
         "Вспом. линии",
+        "Количество",
         "Цена",
         "debug_edges.csv",
+        "debug_faces.csv",
         "Ошибка",
     ]
 
@@ -60,13 +64,19 @@ class FileListWidget(QTableWidget):
         self.setAlternatingRowColors(True)
         self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-        self.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.setEditTriggers(
+            QAbstractItemView.EditTrigger.DoubleClicked
+            | QAbstractItemView.EditTrigger.EditKeyPressed
+            | QAbstractItemView.EditTrigger.SelectedClicked
+        )
         self.verticalHeader().setVisible(False)
         self.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         self.horizontalHeader().setStretchLastSection(True)
+        self.itemChanged.connect(self._on_item_changed)
 
     def set_jobs(self, jobs: list[FileJob]) -> None:
         selected_paths = set(self.selected_paths())
+        self.blockSignals(True)
         self.setRowCount(len(jobs))
 
         for row, job in enumerate(jobs):
@@ -74,6 +84,10 @@ class FileListWidget(QTableWidget):
             for column, value in enumerate(values):
                 item = QTableWidgetItem(value)
                 item.setData(Qt.ItemDataRole.UserRole, job.normalized_path)
+                if self._is_quantity_column(column):
+                    item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
+                else:
+                    item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
                 if column >= 2:
                     item.setTextAlignment(
                         Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter
@@ -86,6 +100,7 @@ class FileListWidget(QTableWidget):
 
             if job.normalized_path in selected_paths:
                 self.selectRow(row)
+        self.blockSignals(False)
 
     def selected_paths(self) -> list[str]:
         rows = sorted({index.row() for index in self.selectedIndexes()})
@@ -135,6 +150,25 @@ class FileListWidget(QTableWidget):
         self.setProperty("dropActive", active)
         self.style().unpolish(self)
         self.style().polish(self)
+
+    def _is_quantity_column(self, column: int) -> bool:
+        headers = self.DIAGNOSTIC_HEADERS if self.diagnostic else self.HEADERS
+        return 0 <= column < len(headers) and headers[column] == "Количество"
+
+    def _on_item_changed(self, item: QTableWidgetItem) -> None:
+        if not self._is_quantity_column(item.column()):
+            return
+        path = str(item.data(Qt.ItemDataRole.UserRole) or "")
+        try:
+            quantity = max(1, int(item.text().strip()))
+        except ValueError:
+            quantity = 1
+        if item.text() != str(quantity):
+            self.blockSignals(True)
+            item.setText(str(quantity))
+            self.blockSignals(False)
+        if path:
+            self.quantityChanged.emit(path, quantity)
 
 
 def _row_color(job: FileJob) -> QColor | None:

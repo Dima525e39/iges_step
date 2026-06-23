@@ -155,6 +155,7 @@ class EdgeClassificationResult:
     global_bounds: Bounds | None = None
     tolerance: float = 0.01
     round_outer_diameter_mm: float = 0.0
+    face_records: tuple[FaceRecord, ...] = ()
 
     @property
     def cut_edge_count(self) -> int:
@@ -311,8 +312,17 @@ def classify_cut_edges(
         global_bounds=global_bounds,
         tolerance=tolerance,
     )
+    round_edge_fallback_analysis = _analyze_round_tube_edge_fallback(
+        edge_records,
+        axis=axis,
+        length_mm=length_mm,
+        global_bounds=global_bounds,
+        has_outer_faces=outer_face_count > 0,
+        tolerance=tolerance,
+    )
     use_round_loop_analysis = bool(round_loop_analysis.cut_edges)
     use_cut_face_analysis = bool(cut_face_analysis.cut_edges)
+    use_round_edge_fallback = bool(round_edge_fallback_analysis.cut_edges)
     if use_round_loop_analysis:
         _suppress_legacy_cut_edges(
             edge_records,
@@ -327,6 +337,13 @@ def classify_cut_edges(
         )
         groups = _groups_from_edge_records(edge_records)
         cut_edges = cut_face_analysis.cut_edges
+    elif use_round_edge_fallback:
+        _suppress_legacy_cut_edges(
+            edge_records,
+            selected_cut_edges=round_edge_fallback_analysis.cut_edges,
+        )
+        groups = _groups_from_edge_records(edge_records)
+        cut_edges = round_edge_fallback_analysis.cut_edges
     else:
         cut_edges = groups.calculated_cut_edges
 
@@ -348,6 +365,12 @@ def classify_cut_edges(
         warnings.append(
             "Длина реза рассчитана по наружным границам граней стенки реза; "
             "внутренние кромки толщины и разбиение CAD-граней не суммируются."
+        )
+    elif use_round_edge_fallback:
+        pierce_count_override = round_edge_fallback_analysis.pierce_count
+        warnings.append(
+            "Наружный цилиндр не найден, но bbox похож на круглую трубу; "
+            "использован fallback по замкнутым/поперечным B-Rep ребрам."
         )
     else:
         pierce_count_override = _count_cut_edge_components(
@@ -413,6 +436,7 @@ def classify_cut_edges(
         round_outer_diameter_mm=(
             round_loop_analysis.outer_radius_mm * 2.0 if use_round_loop_analysis else 0.0
         ),
+        face_records=tuple(face_records),
     )
 
 
@@ -1019,6 +1043,77 @@ def _round_loop_edge_type(
     return CUT_FEATURE
 
 
+def _analyze_round_tube_edge_fallback(
+    edge_records: tuple[EdgeRecord, ...] | list[EdgeRecord],
+    *,
+    axis: str,
+    length_mm: float,
+    global_bounds: Bounds,
+    has_outer_faces: bool,
+    tolerance: float,
+) -> CutFaceAnalysis:
+    if has_outer_faces:
+        return CutFaceAnalysis()
+    if not _global_bounds_looks_round_tube(
+        axis=axis,
+        global_bounds=global_bounds,
+        tolerance=tolerance,
+    ):
+        return CutFaceAnalysis()
+
+    selected: list[EdgeRecord] = []
+    for edge in edge_records:
+        if edge.length_mm <= tolerance:
+            continue
+        if _looks_like_longitudinal_seam(edge, axis=axis, length_mm=length_mm):
+            continue
+        if edge.bounds is not None:
+            axial_span = edge.bounds.sizes[AXIS_INDEX[axis]]
+            if axial_span >= max(length_mm * 0.92, length_mm - tolerance * 4.0):
+                continue
+        edge.edge_type = _round_loop_edge_type(
+            edge,
+            axis=axis,
+            global_bounds=global_bounds,
+            tolerance=tolerance,
+        )
+        edge.reason = f"{edge.edge_type} round edge fallback without detected outer cylinder"
+        selected.append(edge)
+
+    if not selected:
+        return CutFaceAnalysis()
+
+    component_ids = _cut_edge_component_ids(
+        tuple(selected),
+        axis=axis,
+        global_bounds=global_bounds,
+        tolerance=tolerance,
+    )
+    for index, edge in enumerate(selected):
+        edge.cut_component_id = component_ids.get(index, 0)
+    pierce_count = len({component for component in component_ids.values() if component > 0})
+    return CutFaceAnalysis(cut_edges=tuple(selected), pierce_count=pierce_count)
+
+
+def _global_bounds_looks_round_tube(
+    *,
+    axis: str,
+    global_bounds: Bounds,
+    tolerance: float,
+) -> bool:
+    axis_index = AXIS_INDEX[axis]
+    cross_sizes = [
+        global_bounds.sizes[index]
+        for index in range(3)
+        if index != axis_index
+    ]
+    if len(cross_sizes) != 2:
+        return False
+    cross_min = min(cross_sizes)
+    cross_max = max(cross_sizes)
+    return cross_min > tolerance and cross_min / cross_max >= 0.75
+
+
 def _analyze_cut_faces(
     records: tuple[ThicknessFaceRecord, ...],
     *,
@@ -1267,8 +1362,27 @@ def _count_cut_edge_components(
     global_bounds: Bounds | None = None,
     tolerance: float,
 ) -> int:
+    return len(
+        set(
+            _cut_edge_component_ids(
+                edges,
+                axis=axis,
+                global_bounds=global_bounds,
+                tolerance=tolerance,
+            ).values()
+        )
+    )
+
+
+def _cut_edge_component_ids(
+    edges: tuple[EdgeRecord, ...],
+    *,
+    axis: str | None = None,
+    global_bounds: Bounds | None = None,
+    tolerance: float,
+) -> dict[int, int]:
     if not edges:
-        return 0
+        return {}
 
     parent = list(range(len(edges)))
 
@@ -1303,7 +1417,14 @@ def _count_cut_edge_components(
             if _edge_endpoints_touch(left, right, tolerance=tolerance):
                 union(left_index, right_index)
 
-    return len({find(index) for index in range(len(edges))})
+    root_to_component: dict[int, int] = {}
+    component_ids: dict[int, int] = {}
+    for index in range(len(edges)):
+        root = find(index)
+        if root not in root_to_component:
+            root_to_component[root] = len(root_to_component) + 1
+        component_ids[index] = root_to_component[root]
+    return component_ids
 
 
 def _same_tube_end_side(

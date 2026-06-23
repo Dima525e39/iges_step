@@ -85,6 +85,33 @@ class PricingPurchaseProjectTests(unittest.TestCase):
         self.assertEqual(len(rows), 2)
         self.assertEqual({row.tube_size for row in rows}, {first.tube_size, second.tube_size})
 
+    def test_purchase_uses_job_quantity(self) -> None:
+        job = FileJob(Path("a.step"), status=STATUS_IMPORTED)
+        job.material = "Сталь"
+        job.tube_type = "профильная труба"
+        job.tube_size = "25.0×25.0×1.5"
+        job.wall_thickness_mm = "1.5 мм"
+        job.tube_length_mm = "1000.0 мм"
+        job.quantity = 3
+
+        rows = calculate_tube_purchase(
+            [job],
+            {
+                "materials": [
+                    {
+                        "id": "steel",
+                        "name": "Сталь",
+                        "standard_stock_length_mm": 6000.0,
+                        "is_default": True,
+                    }
+                ],
+                "purchase": {"standard_stock_length_mm": 6000.0, "stock_allowance_percent": 0.0},
+            },
+        )
+
+        self.assertEqual(rows[0].detail_count, 3)
+        self.assertEqual(rows[0].detail_length_mm, 3000.0)
+
     def test_project_saves_jobs_and_settings(self) -> None:
         job = FileJob(Path("part.step"), status=STATUS_IMPORTED)
         job.tube_size = "25.0×25.0×1.5"

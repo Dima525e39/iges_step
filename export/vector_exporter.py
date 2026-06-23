@@ -133,6 +133,40 @@ def _write_dxf(
         "0",
         "SECTION",
         "2",
+        "TABLES",
+        "0",
+        "TABLE",
+        "2",
+        "LAYER",
+        "70",
+        "2",
+        "0",
+        "LAYER",
+        "2",
+        "CUT",
+        "70",
+        "0",
+        "62",
+        "1",
+        "6",
+        "CONTINUOUS",
+        "0",
+        "LAYER",
+        "2",
+        "SHEET",
+        "70",
+        "0",
+        "62",
+        "8",
+        "6",
+        "CONTINUOUS",
+        "0",
+        "ENDTAB",
+        "0",
+        "ENDSEC",
+        "0",
+        "SECTION",
+        "2",
         "ENTITIES",
     ]
     for contour in contours:
@@ -140,21 +174,27 @@ def _write_dxf(
         points = contour.points
         if len(points) < 2:
             continue
-        chunks.extend(
-            [
-                "0",
-                "LWPOLYLINE",
-                "8",
-                layer,
-                "90",
-                str(len(points) - 1 if _is_closed(points) else len(points)),
-                "70",
-                "1" if _is_closed(points) else "0",
-            ]
-        )
-        write_points = points[:-1] if _is_closed(points) else points
-        for point in write_points:
-            chunks.extend(["10", f"{point.x_mm:.6f}", "20", f"{point.y_mm:.6f}"])
+        for start, end in zip(points, points[1:], strict=False):
+            chunks.extend(
+                [
+                    "0",
+                    "LINE",
+                    "8",
+                    layer,
+                    "10",
+                    f"{start.x_mm:.6f}",
+                    "20",
+                    f"{start.y_mm:.6f}",
+                    "30",
+                    "0.000000",
+                    "11",
+                    f"{end.x_mm:.6f}",
+                    "21",
+                    f"{end.y_mm:.6f}",
+                    "31",
+                    "0.000000",
+                ]
+            )
     chunks.extend(["0", "ENDSEC", "0", "EOF"])
     path.write_text("\n".join(chunks) + "\n", encoding="utf-8")
     return path

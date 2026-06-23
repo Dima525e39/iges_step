@@ -32,8 +32,10 @@ class FileJob:
     ignored_plane_radius_edges: str = PLACEHOLDER
     auxiliary_unfold_edges: str = PLACEHOLDER
     debug_edges_path: str = ""
+    debug_faces_path: str = ""
     material: str = "Сталь"
     contractor: str = "По умолчанию"
+    quantity: int = 1
     currency: str = "руб."
     price: str = PLACEHOLDER
     price_warning: str = ""
@@ -55,6 +57,7 @@ class FileJob:
             self.tube_length_mm,
             self.cut_length_mm,
             self.pierce_count,
+            str(self.quantity),
             self.formatted_price,
             self.material,
             self.contractor,
@@ -82,8 +85,10 @@ class FileJob:
             self.ignored_longitudinal_edges,
             self.ignored_plane_radius_edges,
             self.auxiliary_unfold_edges,
+            str(self.quantity),
             self.formatted_price,
             self.debug_edges_path,
+            self.debug_faces_path,
             self.error_text,
         ]
 
@@ -112,8 +117,10 @@ class FileJob:
             "ignored_plane_radius_edges": self.ignored_plane_radius_edges,
             "auxiliary_unfold_edges": self.auxiliary_unfold_edges,
             "debug_edges_path": self.debug_edges_path,
+            "debug_faces_path": self.debug_faces_path,
             "material": self.material,
             "contractor": self.contractor,
+            "quantity": self.quantity,
             "currency": self.currency,
             "price": self.price,
             "price_warning": self.price_warning,
@@ -149,8 +156,10 @@ class FileJob:
             ),
             auxiliary_unfold_edges=str(data.get("auxiliary_unfold_edges", PLACEHOLDER)),
             debug_edges_path=str(data.get("debug_edges_path", "")),
+            debug_faces_path=str(data.get("debug_faces_path", "")),
             material=str(data.get("material", "Сталь")),
             contractor=str(data.get("contractor", "По умолчанию")),
+            quantity=max(1, int(data.get("quantity", 1) or 1)),
             currency=str(data.get("currency", "руб.")),
             price=str(data.get("price", PLACEHOLDER)),
             price_warning=str(data.get("price_warning", "")),
