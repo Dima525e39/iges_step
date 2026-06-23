@@ -103,12 +103,16 @@ def _run_import_self_test(output_path: Path | None) -> int:
         record("pythonocc-core import modules: OK")
 
         from cad.analyzer import analyze_shape
+        from cad.dxf_reader import read_dxf_sheet
         from cad.profile_detector import detect_profile_from_dimensions
+        from cad.sheet_analyzer import build_sheet_analysis_from_contours
         from cad.shape_summary import _count_topology
         from cad.unfolder import TubeUnfolder, build_unfolding_preview_from_edges
         from export.excel_exporter import export_excel_workbook
         from export.pdf_commercial_offer import export_commercial_offer_pdf
         from export.pdf_technical_report import export_technical_report_pdf
+        from export.vector_exporter import export_nesting_dxf, export_sheet_svg
+        from nesting.core import MaxRectsNestingEngine
         from pricing.price_selector import calculate_job_price
         from purchase.tube_purchase_calculator import calculate_tube_purchase
 
@@ -139,13 +143,18 @@ def _run_import_self_test(output_path: Path | None) -> int:
         record("unfolding preview helper: OK")
 
         _ = (
+            read_dxf_sheet,
+            build_sheet_analysis_from_contours,
+            MaxRectsNestingEngine,
+            export_nesting_dxf,
+            export_sheet_svg,
             export_excel_workbook,
             export_commercial_offer_pdf,
             export_technical_report_pdf,
             calculate_job_price,
             calculate_tube_purchase,
         )
-        record("pricing/export/purchase helpers: OK")
+        record("DXF/nesting/pricing/export/purchase helpers: OK")
     except Exception as exc:
         exit_code = 1
         record(f"FAILED: {exc.__class__.__name__}: {exc}")

@@ -48,7 +48,7 @@ def export_excel_workbook(
         "Предупреждения",
     ]
     purchase_sheet = [purchase_header, *[row.to_table_row() for row in purchase_rows]]
-    settings_sheet = [["Раздел", "Значение"], ["Версия настроек", "v0.4.11"]]
+    settings_sheet = [["Раздел", "Значение"], ["Версия настроек", "v0.5.0"]]
     settings_sheet.extend(_flatten_settings(settings))
 
     with zipfile.ZipFile(target_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:

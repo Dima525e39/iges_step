@@ -9,6 +9,7 @@ from cad.importer import CadImporter
 from cad.pierce_counter import count_edge_components
 from cad.profile_detector import detect_profile_from_dimensions
 from cad.shape_summary import ShapeSummary, _count_topology, summarize_shape
+from cad.sheet_analyzer import SheetAnalysisResult, analyze_sheet_shape
 
 
 @dataclass(slots=True)
@@ -43,6 +44,7 @@ class GeometryAnalysisResult:
     uncertain_edge_count: int = 0
     debug_edges_path: str = ""
     warnings: tuple[str, ...] = ()
+    sheet_analysis: SheetAnalysisResult | None = None
 
     def as_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -76,6 +78,13 @@ class GeometryAnalysisResult:
             f"Вспомогательных линий развертки: {self.auxiliary_unfold_edge_count}",
             f"Сомнительных ребер: {self.uncertain_edge_count}",
         ]
+        if self.sheet_analysis is not None:
+            lines.append(
+                "Листовые контуры: "
+                f"{self.sheet_analysis.contour_count}; "
+                f"размер {self.sheet_analysis.width_mm:.3f} x "
+                f"{self.sheet_analysis.height_mm:.3f} мм"
+            )
         if self.debug_edges_path:
             lines.append(f"debug_edges.csv: {self.debug_edges_path}")
         if self.warnings:
@@ -112,6 +121,7 @@ def analyze_shape(
     manual_wall_thickness_mm: float | None = None,
     debug_edges_path: str | Path | None = None,
     source_path: str | Path | None = None,
+    sheet_analysis: SheetAnalysisResult | None = None,
 ) -> GeometryAnalysisResult:
     if summary is None:
         if shape is None:
@@ -158,6 +168,73 @@ def analyze_shape(
         warnings.append("Один из габаритов равен нулю; модель может быть поверхностной.")
     if solid_count == 0 and shell_count > 0:
         warnings.append("Найдены оболочки без solid-тела; толщину стенки пока нельзя определить надежно.")
+
+    if sheet_analysis is None and shape is not None:
+        try:
+            sheet_analysis = analyze_sheet_shape(
+                shape,
+                summary=summary,
+                manual_thickness_mm=manual_wall_thickness_mm,
+            )
+        except Exception as exc:
+            warnings.append(f"Листовой анализ не выполнен: {exc}")
+
+    if sheet_analysis is not None:
+        profile_hint = "листовая деталь"
+        width_mm = sheet_analysis.width_mm
+        height_mm = sheet_analysis.height_mm
+        length_axis = "лист"
+        length_mm = max(width_mm, height_mm)
+        cut_length_mm = sheet_analysis.cut_length_mm
+        cut_feature_length_mm = sheet_analysis.cut_length_mm
+        diagnostic_edge_length_mm = sheet_analysis.cut_length_mm
+        pierce_count = sheet_analysis.pierce_count
+        cut_edge_count = len(sheet_analysis.segments)
+        wall_thickness_mm = sheet_analysis.thickness_mm
+        wall_thickness_method = (
+            "ручной ввод"
+            if manual_wall_thickness_mm is not None and manual_wall_thickness_mm > 0.0
+            else f"листовой контур, ось толщины {sheet_analysis.thickness_axis}"
+        )
+        wall_thickness_confidence = "высокая" if wall_thickness_mm > 0.0 else "низкая"
+        warnings.extend(sheet_analysis.warnings)
+        warnings.append(
+            "Листовая деталь рассчитана по 2D-контурам; внешний контур детали входит в рез."
+        )
+        return GeometryAnalysisResult(
+            file_format=file_format,
+            profile_hint=profile_hint,
+            length_axis=length_axis,
+            length_mm=length_mm,
+            width_mm=width_mm,
+            height_mm=height_mm,
+            size_x_mm=sizes["X"],
+            size_y_mm=sizes["Y"],
+            size_z_mm=sizes["Z"],
+            face_count=int(summary.face_count),
+            edge_count=int(summary.edge_count),
+            solid_count=solid_count,
+            shell_count=shell_count,
+            wall_thickness_mm=wall_thickness_mm,
+            wall_thickness_method=wall_thickness_method,
+            wall_thickness_confidence=wall_thickness_confidence,
+            cut_length_mm=cut_length_mm,
+            cut_end_length_mm=cut_end_length_mm,
+            cut_feature_length_mm=cut_feature_length_mm,
+            diagnostic_edge_length_mm=diagnostic_edge_length_mm,
+            pierce_count=pierce_count,
+            cut_edge_count=cut_edge_count,
+            outer_face_count=outer_face_count,
+            ignored_longitudinal_edge_count=ignored_longitudinal_edge_count,
+            ignored_profile_edge_count=ignored_profile_edge_count,
+            ignored_plane_radius_edge_count=ignored_plane_radius_edge_count,
+            auxiliary_unfold_edge_count=auxiliary_unfold_edge_count,
+            uncertain_edge_count=uncertain_edge_count,
+            debug_edges_path=written_debug_edges_path,
+            warnings=tuple(warnings),
+            sheet_analysis=sheet_analysis,
+        )
+
     if shape is not None:
         classification = classify_cut_edges(
             shape,
@@ -236,6 +313,7 @@ def analyze_shape(
         uncertain_edge_count=uncertain_edge_count,
         debug_edges_path=written_debug_edges_path,
         warnings=tuple(warnings),
+        sheet_analysis=sheet_analysis,
     )
 
 

@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
 )
 
 from cad.shape_summary import summarize_shape
+from cad.sheet_analyzer import SheetAnalysisResult
 from cad.unfolder import UnfoldingPreview, build_unfolding_preview
 from core.file_job import FileJob
 
@@ -51,6 +52,11 @@ class Viewer2D(QWidget):
         summary: object | None,
         analysis: object | None,
     ) -> None:
+        sheet_analysis = getattr(analysis, "sheet_analysis", None)
+        if job is not None and isinstance(sheet_analysis, SheetAnalysisResult):
+            self._render_sheet_analysis(job, sheet_analysis)
+            return
+
         if job is None or shape is None:
             self.show_job(job)
             return
@@ -70,6 +76,55 @@ class Viewer2D(QWidget):
             return
 
         self._render_preview(job, preview)
+
+    def _render_sheet_analysis(
+        self,
+        job: FileJob,
+        analysis: SheetAnalysisResult,
+    ) -> None:
+        self.scene.clear()
+        self.header.setText(
+            f"{job.name}: листовая деталь | "
+            f"рез {analysis.cut_length_mm:.1f} мм | "
+            f"врезок {analysis.pierce_count}"
+        )
+
+        margin = 24.0
+        width = max(analysis.width_mm, 1.0)
+        height = max(analysis.height_mm, 1.0)
+        self.scene.setSceneRect(
+            QRectF(0.0, 0.0, width + margin * 2.0, height + margin * 2.0)
+        )
+        self.scene.addRect(
+            QRectF(margin, margin, width, height),
+            QPen(QColor("#94a3b8"), 1.0),
+            QBrush(QColor("#ffffff")),
+        )
+
+        for segment in analysis.segments:
+            self.scene.addLine(
+                margin + segment.start.x_mm,
+                margin + segment.start.y_mm,
+                margin + segment.end.x_mm,
+                margin + segment.end.y_mm,
+                QPen(QColor("#dc2626"), 2.0),
+            )
+
+        for contour in analysis.contours:
+            if not contour.points:
+                continue
+            point = contour.points[0]
+            text = self.scene.addText(str(contour.component_id))
+            text.setDefaultTextColor(QColor("#dc2626"))
+            text.setFont(QFont("Arial", 8, QFont.Weight.Bold))
+            text.setPos(margin + point.x_mm + 3.0, margin + point.y_mm + 3.0)
+
+        if not analysis.segments:
+            text = self.scene.addText("Нет контуров реза")
+            text.setDefaultTextColor(QColor("#64748b"))
+            text.setPos(margin + 8.0, margin + 8.0)
+
+        self._fit_scene()
 
     def _render_preview(self, job: FileJob, preview: UnfoldingPreview) -> None:
         self.scene.clear()

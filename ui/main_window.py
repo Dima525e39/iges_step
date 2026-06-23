@@ -47,6 +47,7 @@ from export.pdf_commercial_offer import export_commercial_offer_pdf
 from export.pdf_technical_report import export_technical_report_pdf
 from export.print_manager import print_html
 from export.report_html import calculation_table_html, commercial_offer_html, technical_report_html
+from export.vector_exporter import export_sheet_dxf, export_sheet_svg
 from pricing.price_selector import calculate_job_price
 from purchase.tube_grouping import number_from_text
 from purchase.tube_purchase_calculator import TubePurchaseRow, calculate_tube_purchase
@@ -62,6 +63,7 @@ from ui.file_list_widget import FileListWidget
 from ui.geometry_debug_dialog import GeometryDebugDialog
 from ui.import_worker import CadImportWorker
 from ui.materials_dialog import MaterialsDialog
+from ui.nesting_dialog import NestingDialog
 from ui.pricing_dialog import PricingDialog
 from ui.settings_dialog import GeneralSettingsDialog
 from ui.stock_purchase_widget import StockPurchaseWidget
@@ -329,11 +331,17 @@ class MainWindow(QMainWindow):
         self.export_csv_button = QPushButton("Экспорт CSV")
         self.export_excel_button = QPushButton("Экспорт Excel")
         self.export_pdf_button = QPushButton("PDF КП")
+        self.export_dxf_button = QPushButton("DXF")
+        self.export_svg_button = QPushButton("SVG")
+        self.nesting_button = QPushButton("Nesting")
         self.save_project_button = QPushButton("Сохранить проект")
 
         actions.addWidget(self.process_selected_button)
         actions.addWidget(self.process_all_button)
         actions.addStretch(1)
+        actions.addWidget(self.nesting_button)
+        actions.addWidget(self.export_dxf_button)
+        actions.addWidget(self.export_svg_button)
         actions.addWidget(self.export_csv_button)
         actions.addWidget(self.export_excel_button)
         actions.addWidget(self.export_pdf_button)
@@ -356,6 +364,9 @@ class MainWindow(QMainWindow):
         self.export_csv_button.clicked.connect(self._export_csv)
         self.export_excel_button.clicked.connect(self._export_excel)
         self.export_pdf_button.clicked.connect(self._export_commercial_pdf)
+        self.export_dxf_button.clicked.connect(self._export_current_sheet_dxf)
+        self.export_svg_button.clicked.connect(self._export_current_sheet_svg)
+        self.nesting_button.clicked.connect(self._open_nesting)
         self.drop_area.pathsDropped.connect(self._add_paths)
         self.file_table.pathsDropped.connect(self._add_paths)
         self.file_table.itemSelectionChanged.connect(self._sync_from_table_selection)
@@ -369,7 +380,7 @@ class MainWindow(QMainWindow):
             self,
             "Добавить CAD-файлы",
             "",
-            "CAD-файлы (*.step *.stp *.iges *.igs);;Все файлы (*.*)",
+            "CAD-файлы (*.step *.stp *.iges *.igs *.dxf);;Все файлы (*.*)",
         )
         if paths:
             self._add_paths(paths)
@@ -616,7 +627,16 @@ class MainWindow(QMainWindow):
         self._refresh_jobs()
         current_job = self._current_job()
         if current_job is not None and current_job.normalized_path == job.normalized_path:
-            self.viewer_3d.show_shape(shape, job.name)
+            if shape is None:
+                self.viewer_3d.show_message(f"{job.name}\nDXF-лист открыт в 2D.")
+                self.viewer_2d.show_unfolding(
+                    job,
+                    shape=None,
+                    summary=shape_summary,
+                    analysis=geometry_analysis,
+                )
+            else:
+                self.viewer_3d.show_shape(shape, job.name)
 
     def _on_import_failed(self, path: str, error_message: str) -> None:
         job = self.queue.get(path)
@@ -652,6 +672,9 @@ class MainWindow(QMainWindow):
         self.add_folder_button.setEnabled(enabled)
         self.clear_button.setEnabled(enabled)
         self.remove_button.setEnabled(enabled)
+        self.export_dxf_button.setEnabled(enabled)
+        self.export_svg_button.setEnabled(enabled)
+        self.nesting_button.setEnabled(enabled)
 
     def _format_model_length(self, summary: object) -> str:
         sizes = [
@@ -893,11 +916,14 @@ class MainWindow(QMainWindow):
         shape = self.imported_shapes.get(job.normalized_path) if job is not None else None
         summary = self.shape_summaries.get(job.normalized_path) if job is not None else None
         analysis = self.shape_analyses.get(job.normalized_path) if job is not None else None
-        if shape is None:
+        if shape is None and getattr(analysis, "sheet_analysis", None) is None:
             self.viewer_3d.show_job(job)
             self.viewer_2d.show_job(job)
         else:
-            self.viewer_3d.show_shape(shape, job.name)
+            if shape is None:
+                self.viewer_3d.show_message(f"{job.name}\nDXF-лист открыт в 2D.")
+            else:
+                self.viewer_3d.show_shape(shape, job.name)
             self.viewer_2d.show_unfolding(
                 job,
                 shape=shape,
@@ -1143,6 +1169,68 @@ class MainWindow(QMainWindow):
             target_path,
         )
         self.statusBar().showMessage(f"PDF техотчет сохранен: {Path(target_path).name}", 5000)
+
+    def _export_current_sheet_dxf(self) -> None:
+        sheet_analysis = self._current_sheet_analysis()
+        if sheet_analysis is None:
+            QMessageBox.information(
+                self,
+                "Экспорт DXF",
+                "Выберите импортированную DXF/листовую деталь.",
+            )
+            return
+        target_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Экспорт DXF",
+            "TubeCutCalculator-sheet.dxf",
+            "DXF (*.dxf)",
+        )
+        if not target_path:
+            return
+        export_sheet_dxf(sheet_analysis, target_path)
+        self.statusBar().showMessage(f"DXF сохранен: {Path(target_path).name}", 5000)
+
+    def _export_current_sheet_svg(self) -> None:
+        sheet_analysis = self._current_sheet_analysis()
+        if sheet_analysis is None:
+            QMessageBox.information(
+                self,
+                "Экспорт SVG",
+                "Выберите импортированную DXF/листовую деталь.",
+            )
+            return
+        target_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Экспорт SVG",
+            "TubeCutCalculator-sheet.svg",
+            "SVG (*.svg)",
+        )
+        if not target_path:
+            return
+        export_sheet_svg(sheet_analysis, target_path)
+        self.statusBar().showMessage(f"SVG сохранен: {Path(target_path).name}", 5000)
+
+    def _open_nesting(self) -> None:
+        jobs: list[tuple[FileJob, object]] = []
+        for job in self.queue.jobs():
+            analysis = self.shape_analyses.get(job.normalized_path)
+            if getattr(analysis, "sheet_analysis", None) is not None:
+                jobs.append((job, analysis))
+        if not jobs:
+            QMessageBox.information(
+                self,
+                "Nesting",
+                "Сначала импортируйте DXF или листовые STEP/IGES детали.",
+            )
+            return
+        NestingDialog(self, jobs=jobs).exec()
+
+    def _current_sheet_analysis(self) -> object | None:
+        job = self._current_job()
+        if job is None:
+            return None
+        analysis = self.shape_analyses.get(job.normalized_path)
+        return getattr(analysis, "sheet_analysis", None)
 
     def _print_current_table(self) -> None:
         if self._ensure_has_jobs():

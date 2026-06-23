@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 APP_NAME = "TubeCutCalculator"
-APP_VERSION = "v0.4.12"
+APP_VERSION = "v0.5.0"
 APP_DESCRIPTION = (
-    "Калькулятор лазерной резки труб: STEP/IGES, расчет реза, "
-    "цены, закупка трубы, Excel/PDF и печать."
+    "Калькулятор лазерной резки труб и листовых деталей: STEP/IGES/DXF, "
+    "расчет реза, nesting, цены, закупка, Excel/PDF и печать."
 )

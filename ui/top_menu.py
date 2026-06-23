@@ -37,6 +37,10 @@ def install_top_menu(window: QMainWindow) -> None:
     _add_action(export_menu, "Экспорт в PDF — коммерческое предложение", window._export_commercial_pdf)
     _add_action(export_menu, "Экспорт в PDF — технический отчет", window._export_technical_pdf)
     export_menu.addSeparator()
+    _add_action(export_menu, "Nesting листовых деталей", window._open_nesting)
+    _add_action(export_menu, "Экспорт текущей листовой детали в DXF", window._export_current_sheet_dxf)
+    _add_action(export_menu, "Экспорт текущей листовой детали в SVG", window._export_current_sheet_svg)
+    export_menu.addSeparator()
     _add_action(export_menu, "Предпросмотр перед печатью", window._preview_print)
 
 

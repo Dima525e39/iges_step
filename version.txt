@@ -1,3 +1,3 @@
-TubeCutCalculator v0.4.12
-Build date: 2026-06-23
-Description: Adds round-tube cut measurement from outer cylindrical face loops while keeping profile-tube analysis unchanged; includes previous multi-plane cut grouping, IGES sewing, UI, pricing, purchase, Excel/PDF, print and project save/load features.
+TubeCutCalculator v0.5.0
+Build date: 2026-06-24
+Description: Adds DXF sheet-part contour analysis, smart MaxRects nesting window, and DXF/SVG export while keeping existing tube STEP/IGES analysis.

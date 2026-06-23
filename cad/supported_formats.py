@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Iterable
 
-SUPPORTED_EXTENSIONS = {".step", ".stp", ".iges", ".igs"}
+SUPPORTED_EXTENSIONS = {".step", ".stp", ".iges", ".igs", ".dxf"}
 
 
 def is_supported_cad_file(path: str | Path) -> bool:
