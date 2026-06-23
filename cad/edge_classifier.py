@@ -114,6 +114,13 @@ class CutFaceAnalysis:
 
 
 @dataclass(slots=True)
+class RoundTubeLoopAnalysis:
+    cut_edges: tuple[EdgeRecord, ...] = ()
+    pierce_count: int = 0
+    selected_face: FaceRecord | None = None
+
+
+@dataclass(slots=True)
 class EdgeGroups:
     calculated_cut_edges: tuple[EdgeRecord, ...] = ()
     auxiliary_unfold_edges: tuple[EdgeRecord, ...] = ()
@@ -286,6 +293,15 @@ def classify_cut_edges(
         has_outer_faces=outer_face_count > 0,
         tolerance=tolerance,
     )
+    round_loop_analysis = _analyze_round_tube_outer_loops(
+        face_records,
+        edge_records,
+        axis=axis,
+        length_mm=length_mm,
+        global_bounds=global_bounds,
+        tolerance=tolerance,
+        warnings=warnings,
+    )
     cut_face_analysis = _analyze_cut_faces(
         thickness_faces,
         axis=axis,
@@ -293,8 +309,16 @@ def classify_cut_edges(
         global_bounds=global_bounds,
         tolerance=tolerance,
     )
+    use_round_loop_analysis = bool(round_loop_analysis.cut_edges)
     use_cut_face_analysis = bool(cut_face_analysis.cut_edges)
-    if use_cut_face_analysis:
+    if use_round_loop_analysis:
+        _suppress_legacy_cut_edges(
+            edge_records,
+            selected_cut_edges=round_loop_analysis.cut_edges,
+        )
+        groups = _groups_from_edge_records(edge_records)
+        cut_edges = round_loop_analysis.cut_edges
+    elif use_cut_face_analysis:
         _suppress_legacy_cut_edges(
             edge_records,
             selected_cut_edges=cut_face_analysis.cut_edges,
@@ -311,7 +335,13 @@ def classify_cut_edges(
         )
 
     cut_length_override_mm = sum(edge.length_mm for edge in cut_edges)
-    if use_cut_face_analysis:
+    if use_round_loop_analysis:
+        pierce_count_override = round_loop_analysis.pierce_count
+        warnings.append(
+            "Круглая труба рассчитана по контурам наружной цилиндрической грани; "
+            "каждый найденный EdgeLoop считается отдельной врезкой."
+        )
+    elif use_cut_face_analysis:
         pierce_count_override = cut_face_analysis.pierce_count
         warnings.append(
             "Длина реза рассчитана по наружным границам граней стенки реза; "
@@ -785,6 +815,203 @@ def _distinct_sorted(values: Iterable[float], *, tolerance: float) -> tuple[floa
             continue
         distinct.append(value)
     return tuple(distinct)
+
+
+def _analyze_round_tube_outer_loops(
+    face_records: tuple[FaceRecord, ...] | list[FaceRecord],
+    edge_records: tuple[EdgeRecord, ...] | list[EdgeRecord],
+    *,
+    axis: str,
+    length_mm: float,
+    global_bounds: Bounds,
+    tolerance: float,
+    warnings: list[str],
+) -> RoundTubeLoopAnalysis:
+    outer_radius = _round_tube_outer_radius(
+        tuple(face_records),
+        axis=axis,
+        length_mm=length_mm,
+        global_bounds=global_bounds,
+        tolerance=tolerance,
+    )
+    if outer_radius <= tolerance:
+        return RoundTubeLoopAnalysis()
+
+    candidates: list[tuple[float, int, FaceRecord, tuple[EdgeRecord, ...]]] = []
+    for face_record in face_records:
+        if not _is_round_outer_face_for_loop_sum(
+            face_record,
+            axis=axis,
+            length_mm=length_mm,
+            outer_radius=outer_radius,
+            tolerance=tolerance,
+        ):
+            continue
+
+        wire_records = _collect_wire_records(face_record, warnings=warnings)
+        cut_edges: list[EdgeRecord] = []
+        loop_count = 0
+
+        for wire_record in wire_records:
+            loop_edges = _round_outer_loop_cut_edges(
+                wire_record,
+                edge_records,
+                axis=axis,
+                length_mm=length_mm,
+                global_bounds=global_bounds,
+                tolerance=tolerance,
+            )
+            if not loop_edges:
+                continue
+            loop_count += 1
+            component_id = loop_count
+            for edge in loop_edges:
+                if _find_same_edge(cut_edges, edge.edge) is not None:
+                    continue
+                edge.edge_type = _round_loop_edge_type(
+                    edge,
+                    axis=axis,
+                    global_bounds=global_bounds,
+                    tolerance=tolerance,
+                )
+                edge.reason = f"{edge.edge_type} round outer face loop"
+                edge.cut_component_id = component_id
+                cut_edges.append(edge)
+
+        if cut_edges and loop_count > 0:
+            candidates.append(
+                (
+                    sum(edge.length_mm for edge in cut_edges),
+                    loop_count,
+                    face_record,
+                    tuple(cut_edges),
+                )
+            )
+
+    if not candidates:
+        return RoundTubeLoopAnalysis()
+
+    length_sum, loop_count, face_record, cut_edges = max(
+        candidates,
+        key=lambda item: (item[0], item[1]),
+    )
+    if length_sum <= tolerance:
+        return RoundTubeLoopAnalysis()
+    return RoundTubeLoopAnalysis(
+        cut_edges=cut_edges,
+        pierce_count=loop_count,
+        selected_face=face_record,
+    )
+
+
+def _round_tube_outer_radius(
+    face_records: tuple[FaceRecord, ...],
+    *,
+    axis: str,
+    length_mm: float,
+    global_bounds: Bounds,
+    tolerance: float,
+) -> float:
+    axis_index = AXIS_INDEX[axis]
+    cross_sizes = [
+        global_bounds.sizes[index]
+        for index in range(3)
+        if index != axis_index
+    ]
+    if len(cross_sizes) != 2:
+        return 0.0
+    cross_min = min(cross_sizes)
+    cross_max = max(cross_sizes)
+    if cross_min <= tolerance or cross_min / cross_max < 0.85:
+        return 0.0
+
+    expected_radius = (cross_min + cross_max) / 4.0
+    radius_tolerance = max(tolerance * 2.0, expected_radius * 0.08, 0.6)
+    radii = sorted(
+        radius
+        for face in face_records
+        if face.bounds.sizes[axis_index] >= max(length_mm * 0.02, tolerance)
+        for radius in (_cylinder_radius(face.face),)
+        if radius is not None and radius > tolerance
+    )
+    distinct = _distinct_sorted(radii, tolerance=tolerance)
+    if len(distinct) < 2:
+        return 0.0
+
+    outer_radius = distinct[-1]
+    if abs(outer_radius - expected_radius) > radius_tolerance:
+        return 0.0
+    return outer_radius
+
+
+def _is_round_outer_face_for_loop_sum(
+    face_record: FaceRecord,
+    *,
+    axis: str,
+    length_mm: float,
+    outer_radius: float,
+    tolerance: float,
+) -> bool:
+    radius = _cylinder_radius(face_record.face)
+    if radius is None:
+        return False
+    radius_tolerance = max(tolerance * 2.0, outer_radius * 0.08, 0.6)
+    if abs(radius - outer_radius) > radius_tolerance:
+        return False
+
+    axis_span = face_record.bounds.sizes[AXIS_INDEX[axis]]
+    return axis_span >= max(length_mm * 0.02, tolerance)
+
+
+def _round_outer_loop_cut_edges(
+    wire_record: WireRecord,
+    edge_records: tuple[EdgeRecord, ...] | list[EdgeRecord],
+    *,
+    axis: str,
+    length_mm: float,
+    global_bounds: Bounds,
+    tolerance: float,
+) -> tuple[EdgeRecord, ...]:
+    selected: list[EdgeRecord] = []
+    edge_record_list = list(edge_records)
+    for wire_edge in wire_record.edges:
+        edge = _find_same_edge(edge_record_list, wire_edge)
+        if edge is None:
+            continue
+        if edge.length_mm <= tolerance:
+            continue
+        if _looks_like_longitudinal_seam(edge, axis=axis, length_mm=length_mm):
+            continue
+        if edge.non_outer_face_count <= 0:
+            continue
+        if _round_loop_edge_type(
+            edge,
+            axis=axis,
+            global_bounds=global_bounds,
+            tolerance=tolerance,
+        ) not in CALCULATED_CUT_TYPES:
+            continue
+        if _find_same_edge(selected, edge.edge) is not None:
+            continue
+        selected.append(edge)
+    return tuple(selected)
+
+
+def _round_loop_edge_type(
+    edge: EdgeRecord,
+    *,
+    axis: str,
+    global_bounds: Bounds,
+    tolerance: float,
+) -> str:
+    if _is_tube_end_edge(
+        edge,
+        axis=axis,
+        global_bounds=global_bounds,
+        tolerance=tolerance,
+    ):
+        return CUT_END
+    return CUT_FEATURE
 
 
 def _analyze_cut_faces(

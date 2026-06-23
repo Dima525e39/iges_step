@@ -17,6 +17,7 @@ from cad.edge_classifier import (
     FaceRecord,
     ThicknessFaceRecord,
     _analyze_cut_faces,
+    _analyze_round_tube_outer_loops,
     _classify_edge_groups,
     _collect_thickness_outer_cut_edges,
     _count_cut_edge_components,
@@ -25,6 +26,7 @@ from cad.edge_classifier import (
     _is_cut_edge_candidate,
     _is_outer_longitudinal_face,
     _is_thickness_face_candidate,
+    WireRecord,
     estimate_wall_thickness,
 )
 from cad.debug_edges import write_debug_edges_csv
@@ -528,6 +530,104 @@ class GeometryAnalyzerTests(unittest.TestCase):
         self.assertEqual(estimate.thickness_mm, 3.0)
         self.assertEqual(estimate.method, "цилиндры R_outer - R_inner")
         self.assertEqual(estimate.confidence, "высокая")
+
+    def test_round_tube_uses_outer_cylindrical_face_loops(self) -> None:
+        import cad.edge_classifier as edge_classifier
+
+        outer_face = FaceRecord(
+            FakeCylinderFace(50.0),
+            Bounds(-50.0, -50.0, 0.0, 50.0, 50.0, 1000.0),
+            True,
+        )
+        inner_face = FaceRecord(
+            FakeCylinderFace(47.0),
+            Bounds(-47.0, -47.0, 0.0, 47.0, 47.0, 1000.0),
+            False,
+        )
+        end_face = FaceRecord(
+            object(),
+            Bounds(-50.0, -50.0, 0.0, 50.0, 50.0, 0.0),
+            False,
+        )
+        cut_face = FaceRecord(
+            object(),
+            Bounds(0.0, -50.0, 400.0, 20.0, -47.0, 420.0),
+            False,
+        )
+        end_edge_shape = object()
+        cut_edge_shape = object()
+        end_edge = EdgeRecord(
+            edge=end_edge_shape,
+            length_mm=314.0,
+            bounds=Bounds(-50.0, -50.0, 0.0, 50.0, 50.0, 0.0),
+            faces=[outer_face, end_face],
+        )
+        cut_edge = EdgeRecord(
+            edge=cut_edge_shape,
+            length_mm=30.0,
+            bounds=Bounds(0.0, -50.0, 400.0, 20.0, -50.0, 420.0),
+            faces=[outer_face, cut_face],
+        )
+        seam_edge = EdgeRecord(
+            edge=object(),
+            length_mm=1000.0,
+            bounds=Bounds(50.0, 0.0, 0.0, 50.0, 0.0, 1000.0),
+            faces=[outer_face],
+        )
+        original_collect_wire_records = edge_classifier._collect_wire_records
+
+        def fake_collect_wire_records(face_record, *, warnings):
+            if face_record is not outer_face:
+                return []
+            return [
+                WireRecord(object(), face_record, (end_edge_shape,), 314.0),
+                WireRecord(object(), face_record, (cut_edge_shape, seam_edge.edge), 1030.0),
+            ]
+
+        edge_classifier._collect_wire_records = fake_collect_wire_records
+        try:
+            analysis = _analyze_round_tube_outer_loops(
+                (outer_face, inner_face, end_face, cut_face),
+                (end_edge, cut_edge, seam_edge),
+                axis="Z",
+                length_mm=1000.0,
+                global_bounds=Bounds(-50.0, -50.0, 0.0, 50.0, 50.0, 1000.0),
+                tolerance=0.01,
+                warnings=[],
+            )
+        finally:
+            edge_classifier._collect_wire_records = original_collect_wire_records
+
+        self.assertEqual(analysis.cut_edges, (end_edge, cut_edge))
+        self.assertEqual(analysis.pierce_count, 2)
+        self.assertEqual(end_edge.edge_type, CUT_END)
+        self.assertEqual(cut_edge.edge_type, CUT_FEATURE)
+        self.assertEqual(seam_edge.edge_type, "")
+
+    def test_round_tube_loop_analysis_does_not_handle_rectangular_profile(self) -> None:
+        outer_face = FaceRecord(
+            FakeCylinderFace(5.0),
+            Bounds(20.0, 10.0, 0.0, 25.0, 15.0, 1000.0),
+            True,
+        )
+        inner_face = FaceRecord(
+            FakeCylinderFace(3.0),
+            Bounds(21.0, 11.0, 0.0, 24.0, 14.0, 1000.0),
+            False,
+        )
+
+        analysis = _analyze_round_tube_outer_loops(
+            (outer_face, inner_face),
+            (),
+            axis="Z",
+            length_mm=1000.0,
+            global_bounds=Bounds(-25.0, -15.0, 0.0, 25.0, 15.0, 1000.0),
+            tolerance=0.01,
+            warnings=[],
+        )
+
+        self.assertEqual(analysis.cut_edges, ())
+        self.assertEqual(analysis.pierce_count, 0)
 
     def test_manual_wall_thickness_override_wins(self) -> None:
         estimate = estimate_wall_thickness(

@@ -2,7 +2,7 @@
 setlocal
 
 set APP_NAME=TubeCutCalculator
-set APP_VERSION=v0.4.11
+set APP_VERSION=v0.4.12
 set ENV_NAME=TubeCutCalculator
 
 echo Building %APP_NAME% %APP_VERSION%
@@ -32,7 +32,7 @@ if errorlevel 1 (
     if errorlevel 1 exit /b 1
 )
 
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$date=(Get-Date).ToString('yyyy-MM-dd HH:mm:ss'); Set-Content -Encoding UTF8 version.txt @('TubeCutCalculator v0.4.11','Build date: ' + $date,'Description: Corrected cut length and pierce count on real IGES tube parts, multi-plane cut grouping, IGES sewing on import, 3D viewer auto-fit, readable selectable side panel and visible filter bar; calculator UI, themes, contractors/materials/pricing, tube purchase, Excel/PDF export, print, project save/load, 3D B-Rep cut analysis.')"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$date=(Get-Date).ToString('yyyy-MM-dd HH:mm:ss'); Set-Content -Encoding UTF8 version.txt @('TubeCutCalculator v0.4.12','Build date: ' + $date,'Description: Adds round-tube cut measurement from outer cylindrical face loops while keeping profile-tube analysis unchanged; includes previous multi-plane cut grouping, IGES sewing, UI, pricing, purchase, Excel/PDF, print and project save/load features.')"
 if errorlevel 1 exit /b 1
 
 call %CONDA_CMD% run -n %ENV_NAME% python -m PyInstaller --noconfirm --clean TubeCutCalculator.spec
