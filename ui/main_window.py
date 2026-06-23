@@ -694,11 +694,14 @@ class MainWindow(QMainWindow):
         width = float(getattr(analysis, "width_mm", 0.0) or 0.0)
         height = float(getattr(analysis, "height_mm", 0.0) or 0.0)
         thickness = float(getattr(analysis, "wall_thickness_mm", 0.0) or 0.0)
+        round_diameter = float(getattr(analysis, "round_outer_diameter_mm", 0.0) or 0.0)
         profile = str(getattr(analysis, "profile_hint", "") or "").lower()
         if width <= 0.0 or height <= 0.0:
             return PLACEHOLDER
-        if "круг" in profile or abs(width - height) <= 0.2:
-            base = f"Ø{width:.1f}"
+        if round_diameter > 0.0:
+            base = f"Ø{round_diameter:.1f}"
+        elif "круг" in profile and "квадрат" not in profile:
+            base = f"Ø{max(width, height):.1f}"
         else:
             base = f"{width:.1f}×{height:.1f}"
         if thickness > 0.0:

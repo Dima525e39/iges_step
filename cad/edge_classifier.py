@@ -118,6 +118,7 @@ class RoundTubeLoopAnalysis:
     cut_edges: tuple[EdgeRecord, ...] = ()
     pierce_count: int = 0
     selected_face: FaceRecord | None = None
+    outer_radius_mm: float = 0.0
 
 
 @dataclass(slots=True)
@@ -153,6 +154,7 @@ class EdgeClassificationResult:
     length_axis: str = "Z"
     global_bounds: Bounds | None = None
     tolerance: float = 0.01
+    round_outer_diameter_mm: float = 0.0
 
     @property
     def cut_edge_count(self) -> int:
@@ -408,6 +410,9 @@ def classify_cut_edges(
         length_axis=axis,
         global_bounds=global_bounds,
         tolerance=tolerance,
+        round_outer_diameter_mm=(
+            round_loop_analysis.outer_radius_mm * 2.0 if use_round_loop_analysis else 0.0
+        ),
     )
 
 
@@ -901,6 +906,7 @@ def _analyze_round_tube_outer_loops(
         cut_edges=cut_edges,
         pierce_count=loop_count,
         selected_face=face_record,
+        outer_radius_mm=outer_radius,
     )
 
 
@@ -922,11 +928,11 @@ def _round_tube_outer_radius(
         return 0.0
     cross_min = min(cross_sizes)
     cross_max = max(cross_sizes)
-    if cross_min <= tolerance or cross_min / cross_max < 0.85:
+    if cross_min <= tolerance or cross_min / cross_max < 0.75:
         return 0.0
 
     expected_radius = (cross_min + cross_max) / 4.0
-    radius_tolerance = max(tolerance * 2.0, expected_radius * 0.08, 0.6)
+    radius_tolerance = max(tolerance * 2.0, expected_radius * 0.12, 0.8)
     radii = sorted(
         radius
         for face in face_records
@@ -935,7 +941,7 @@ def _round_tube_outer_radius(
         if radius is not None and radius > tolerance
     )
     distinct = _distinct_sorted(radii, tolerance=tolerance)
-    if len(distinct) < 2:
+    if not distinct:
         return 0.0
 
     outer_radius = distinct[-1]
@@ -982,8 +988,6 @@ def _round_outer_loop_cut_edges(
             continue
         if _looks_like_longitudinal_seam(edge, axis=axis, length_mm=length_mm):
             continue
-        if edge.non_outer_face_count <= 0:
-            continue
         if _round_loop_edge_type(
             edge,
             axis=axis,
@@ -1009,6 +1013,7 @@ def _round_loop_edge_type(
         axis=axis,
         global_bounds=global_bounds,
         tolerance=tolerance,
+        allow_outer_only=True,
     ):
         return CUT_END
     return CUT_FEATURE
@@ -1559,10 +1564,11 @@ def _is_tube_end_edge(
     axis: str,
     global_bounds: Bounds,
     tolerance: float,
+    allow_outer_only: bool = False,
 ) -> bool:
     if edge.bounds is None:
         return False
-    if edge.non_outer_face_count <= 0:
+    if edge.non_outer_face_count <= 0 and not allow_outer_only:
         return False
     return _edge_end_side(edge, axis=axis, global_bounds=global_bounds, tolerance=tolerance) is not None
 

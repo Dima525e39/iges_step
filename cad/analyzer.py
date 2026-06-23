@@ -30,6 +30,7 @@ class GeometryAnalysisResult:
     wall_thickness_mm: float = 0.0
     wall_thickness_method: str = "не определена"
     wall_thickness_confidence: str = "низкая"
+    round_outer_diameter_mm: float = 0.0
     cut_length_mm: float = 0.0
     cut_end_length_mm: float = 0.0
     cut_feature_length_mm: float = 0.0
@@ -158,6 +159,7 @@ def analyze_shape(
     wall_thickness_mm = 0.0
     wall_thickness_method = "не определена"
     wall_thickness_confidence = "низкая"
+    round_outer_diameter_mm = 0.0
     ignored_longitudinal_edge_count = 0
     ignored_profile_edge_count = 0
     ignored_plane_radius_edge_count = 0
@@ -218,6 +220,7 @@ def analyze_shape(
             wall_thickness_mm=wall_thickness_mm,
             wall_thickness_method=wall_thickness_method,
             wall_thickness_confidence=wall_thickness_confidence,
+            round_outer_diameter_mm=0.0,
             cut_length_mm=cut_length_mm,
             cut_end_length_mm=cut_end_length_mm,
             cut_feature_length_mm=cut_feature_length_mm,
@@ -254,6 +257,11 @@ def analyze_shape(
         wall_thickness_mm = classification.wall_thickness_mm
         wall_thickness_method = classification.wall_thickness_method
         wall_thickness_confidence = classification.wall_thickness_confidence
+        round_outer_diameter_mm = classification.round_outer_diameter_mm
+        if round_outer_diameter_mm > 0.0:
+            profile_hint = "Круглая труба"
+            width_mm = round_outer_diameter_mm
+            height_mm = round_outer_diameter_mm
         diagnostic_edge_length_mm = classification.diagnostic_edge_length_mm
         ignored_longitudinal_edge_count = classification.ignored_longitudinal_edge_count
         ignored_profile_edge_count = classification.ignored_profile_edge_count
@@ -299,6 +307,7 @@ def analyze_shape(
         wall_thickness_mm=wall_thickness_mm,
         wall_thickness_method=wall_thickness_method,
         wall_thickness_confidence=wall_thickness_confidence,
+        round_outer_diameter_mm=round_outer_diameter_mm,
         cut_length_mm=cut_length_mm,
         cut_end_length_mm=cut_end_length_mm,
         cut_feature_length_mm=cut_feature_length_mm,
