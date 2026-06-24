@@ -866,6 +866,57 @@ class GeometryAnalyzerTests(unittest.TestCase):
         self.assertEqual(analysis.pierce_count, 1)
         self.assertEqual(sum(edge.length_mm for edge in analysis.cut_edges), 407.2)
 
+    def test_round_tube_loop_analysis_counts_both_tube_ends(self) -> None:
+        import cad.edge_classifier as edge_classifier
+
+        outer_face = FaceRecord(
+            FakeCylinderFace(17.5),
+            Bounds(-17.5, -17.5, 0.0, 17.5, 17.5, 1000.0),
+            True,
+        )
+        min_end_shape = object()
+        max_end_shape = object()
+        min_end = EdgeRecord(
+            edge=min_end_shape,
+            length_mm=110.0,
+            bounds=Bounds(-17.5, -17.5, 0.0, 17.5, 17.5, 0.0),
+            faces=[outer_face],
+        )
+        max_end = EdgeRecord(
+            edge=max_end_shape,
+            length_mm=112.0,
+            bounds=Bounds(-17.5, -17.5, 997.0, 17.5, 17.5, 1000.0),
+            faces=[outer_face],
+        )
+        original_collect_wire_records = edge_classifier._collect_wire_records
+
+        def fake_collect_wire_records(face_record, *, warnings):
+            if face_record is not outer_face:
+                return []
+            return [
+                WireRecord(object(), face_record, (min_end_shape,), 110.0),
+                WireRecord(object(), face_record, (max_end_shape,), 112.0),
+            ]
+
+        edge_classifier._collect_wire_records = fake_collect_wire_records
+        try:
+            analysis = _analyze_round_tube_outer_loops(
+                (outer_face,),
+                (min_end, max_end),
+                axis="Z",
+                length_mm=1000.0,
+                global_bounds=Bounds(-17.5, -17.5, 0.0, 17.5, 17.5, 1000.0),
+                tolerance=0.01,
+                warnings=[],
+            )
+        finally:
+            edge_classifier._collect_wire_records = original_collect_wire_records
+
+        self.assertEqual(analysis.cut_edges, (min_end, max_end))
+        self.assertEqual(analysis.pierce_count, 2)
+        self.assertEqual(min_end.edge_type, CUT_END)
+        self.assertEqual(max_end.edge_type, CUT_END)
+
     def test_round_tube_loop_analysis_keeps_edges_with_incomplete_adjacency(self) -> None:
         import cad.edge_classifier as edge_classifier
 

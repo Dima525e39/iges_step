@@ -906,11 +906,18 @@ def _analyze_round_tube_outer_loops(
             if not loop_edges:
                 continue
             loop_length = sum(edge.length_mm for edge in loop_edges)
+            loop_end_side = _round_loop_end_side(
+                loop_edges,
+                axis=axis,
+                global_bounds=global_bounds,
+                tolerance=tolerance,
+            )
             loop_key = _round_loop_group_key(
                 loop_edges,
                 axis=axis,
                 global_bounds=global_bounds,
                 tolerance=tolerance,
+                end_side=loop_end_side,
             )
             current = loop_groups.get(loop_key)
             if current is not None:
@@ -923,10 +930,16 @@ def _analyze_round_tube_outer_loops(
 
         cut_edges: list[EdgeRecord] = []
         for component_id, (_loop_length, loop_edges) in enumerate(loop_groups.values(), start=1):
+            loop_end_side = _round_loop_end_side(
+                loop_edges,
+                axis=axis,
+                global_bounds=global_bounds,
+                tolerance=tolerance,
+            )
             for edge in loop_edges:
                 if _find_same_edge(cut_edges, edge.edge) is not None:
                     continue
-                edge.edge_type = _round_loop_edge_type(
+                edge.edge_type = CUT_END if loop_end_side is not None else _round_loop_edge_type(
                     edge,
                     axis=axis,
                     global_bounds=global_bounds,
@@ -970,18 +983,13 @@ def _round_loop_group_key(
     axis: str,
     global_bounds: Bounds,
     tolerance: float,
+    end_side: str | None = None,
 ) -> tuple[object, ...]:
     loop_bounds = _combined_edge_bounds(edges)
     if loop_bounds is None:
         return ("unknown", id(edges))
 
     axis_index = AXIS_INDEX[axis]
-    end_side = _bounds_end_side(
-        loop_bounds,
-        axis=axis,
-        global_bounds=global_bounds,
-        tolerance=tolerance,
-    )
     if end_side is not None:
         return ("end", end_side)
 
@@ -996,6 +1004,30 @@ def _round_loop_group_key(
         "feature",
         *(round(value / grid) for value in center_values),
         *(round(value / grid) for value in span_values),
+    )
+
+
+def _round_loop_end_side(
+    edges: tuple[EdgeRecord, ...],
+    *,
+    axis: str,
+    global_bounds: Bounds,
+    tolerance: float,
+) -> str | None:
+    loop_bounds = _combined_edge_bounds(edges)
+    if loop_bounds is None:
+        return None
+    axis_index = AXIS_INDEX[axis]
+    cross_indexes = [index for index in range(3) if index != axis_index]
+    global_cross_min = min(global_bounds.sizes[index] for index in cross_indexes)
+    loop_cross_max = max(loop_bounds.sizes[index] for index in cross_indexes)
+    if global_cross_min <= tolerance or loop_cross_max < global_cross_min * 0.65:
+        return None
+    return _bounds_end_side(
+        loop_bounds,
+        axis=axis,
+        global_bounds=global_bounds,
+        tolerance=tolerance,
     )
 
 
@@ -1033,10 +1065,16 @@ def _bounds_end_side(
     bound_max = bounds.maxes[axis_index]
     global_min = global_bounds.mins[axis_index]
     global_max = global_bounds.maxes[axis_index]
-    end_tolerance = max(tolerance * 4.0, 0.05)
-    if abs(bound_min - global_min) <= end_tolerance and abs(bound_max - global_min) <= end_tolerance:
+    global_length = max(0.0, global_max - global_min)
+    bound_center = (bound_min + bound_max) / 2.0
+    axial_span = max(0.0, bound_max - bound_min)
+    end_tolerance = max(tolerance * 8.0, min(2.0, global_length * 0.003), 0.10)
+    end_span_tolerance = max(end_tolerance * 6.0, min(8.0, global_length * 0.01))
+    near_min = min(abs(bound_min - global_min), abs(bound_max - global_min)) <= end_tolerance
+    near_max = min(abs(bound_min - global_max), abs(bound_max - global_max)) <= end_tolerance
+    if near_min and axial_span <= end_span_tolerance and abs(bound_center - global_min) <= abs(bound_center - global_max):
         return "min"
-    if abs(bound_min - global_max) <= end_tolerance and abs(bound_max - global_max) <= end_tolerance:
+    if near_max and axial_span <= end_span_tolerance and abs(bound_center - global_max) <= abs(bound_center - global_min):
         return "max"
     return None
 
