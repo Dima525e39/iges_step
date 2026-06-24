@@ -36,6 +36,7 @@ from cad.pierce_counter import _count_components_from_pairs
 from cad.profile_detector import detect_profile_from_dimensions
 from cad.shape_summary import ShapeSummary
 from cad.supported_formats import collect_supported_files, is_supported_cad_file
+from core.file_job import parse_quantity_from_filename
 from core.file_queue import FileQueue
 
 
@@ -103,6 +104,33 @@ class FileQueueTests(unittest.TestCase):
         self.assertEqual(len(first.added), 1)
         self.assertEqual(len(second.added), 0)
         self.assertEqual(len(second.duplicates), 1)
+
+    def test_queue_parses_quantity_from_filename(self) -> None:
+        from tempfile import TemporaryDirectory
+        from pathlib import Path
+
+        with TemporaryDirectory() as temp_dir:
+            file_path = Path(temp_dir) / "bracket_x5.dxf"
+            file_path.write_text("", encoding="utf-8")
+
+            queue = FileQueue()
+            result = queue.add_paths([file_path])
+
+        self.assertEqual(len(result.added), 1)
+        self.assertEqual(result.added[0].quantity, 5)
+
+    def test_parse_quantity_from_filename(self) -> None:
+        cases = {
+            "part_x5.dxf": 5,
+            "part 12шт.dxf": 12,
+            "part qty-7.step": 7,
+            "part (3).igs": 3,
+            "tube 40x20x2.dxf": 1,
+            "profile_35x2.5.dxf": 1,
+        }
+        for filename, expected in cases.items():
+            with self.subTest(filename=filename):
+                self.assertEqual(parse_quantity_from_filename(filename), expected)
 
 
 class CadImporterTests(unittest.TestCase):

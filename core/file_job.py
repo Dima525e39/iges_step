@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -11,6 +12,29 @@ STATUS_DONE = "Обработан"
 STATUS_IMPORTED = "Импортирован"
 STATUS_IMPORTING = "Импорт..."
 STATUS_ERROR = "Ошибка импорта"
+
+
+_QUANTITY_PATTERNS = (
+    re.compile(r"(?:^|[\s_\-()[\]])(?:x|х|qty|q-ty|кол|kol|count)\s*[:=_-]?\s*(\d{1,4})(?=$|[\s_\-().\[\]])", re.IGNORECASE),
+    re.compile(r"(?:^|[\s_\-()[\]])(\d{1,4})\s*(?:шт|штук|pcs|pc|pieces)(?=$|[\s_\-().\[\]])", re.IGNORECASE),
+    re.compile(r"(?:^|[\s_\-()[\]])(\d{1,4})\s*(?:x|х)(?=$|[\s_\-().\[\]])", re.IGNORECASE),
+    re.compile(r"[\s_\-()[\[](\d{1,4})[\])\]]?$", re.IGNORECASE),
+)
+
+
+def parse_quantity_from_filename(path: str | Path) -> int:
+    stem = Path(path).stem.strip()
+    for pattern in _QUANTITY_PATTERNS:
+        match = pattern.search(stem)
+        if match is None:
+            continue
+        try:
+            quantity = int(match.group(1))
+        except (TypeError, ValueError):
+            continue
+        if quantity >= 1:
+            return min(quantity, 9999)
+    return 1
 
 
 @dataclass(slots=True)

@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Iterable
 
 from cad.supported_formats import collect_supported_files
-from core.file_job import FileJob
+from core.file_job import FileJob, parse_quantity_from_filename
 
 
 @dataclass(slots=True)
@@ -38,7 +38,10 @@ class FileQueue:
                 result.duplicates.append(file_path)
                 continue
 
-            job = FileJob(path=file_path)
+            job = FileJob(
+                path=file_path,
+                quantity=parse_quantity_from_filename(file_path),
+            )
             self._jobs[key] = job
             result.added.append(job)
 
