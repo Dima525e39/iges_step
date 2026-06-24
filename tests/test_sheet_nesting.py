@@ -162,6 +162,107 @@ class SheetDxfAndNestingTests(unittest.TestCase):
         outer = next(contour for contour in analysis.contours if contour.is_outer)
         self.assertGreater(len(outer.points), 8)
 
+    def test_reads_legacy_dxf_polyline_vertices(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "legacy_polyline.dxf"
+            path.write_text(
+                "\n".join(
+                    [
+                        "0",
+                        "SECTION",
+                        "2",
+                        "ENTITIES",
+                        "0",
+                        "POLYLINE",
+                        "8",
+                        "CUT",
+                        "70",
+                        "1",
+                        "0",
+                        "VERTEX",
+                        "10",
+                        "0",
+                        "20",
+                        "0",
+                        "0",
+                        "VERTEX",
+                        "10",
+                        "40",
+                        "20",
+                        "0",
+                        "0",
+                        "VERTEX",
+                        "10",
+                        "40",
+                        "20",
+                        "20",
+                        "0",
+                        "VERTEX",
+                        "10",
+                        "0",
+                        "20",
+                        "20",
+                        "0",
+                        "SEQEND",
+                        "0",
+                        "ENDSEC",
+                        "0",
+                        "EOF",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            summary, analysis = read_dxf_sheet(path)
+
+        self.assertEqual(summary.size_x_mm, 40.0)
+        self.assertEqual(summary.size_y_mm, 20.0)
+        self.assertEqual(analysis.pierce_count, 1)
+        self.assertAlmostEqual(analysis.cut_length_mm, 120.0)
+
+    def test_dxf_reader_skips_bad_numeric_entities(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "bad_number.dxf"
+            path.write_text(
+                "\n".join(
+                    [
+                        "0",
+                        "SECTION",
+                        "2",
+                        "ENTITIES",
+                        "0",
+                        "LINE",
+                        "10",
+                        "bad",
+                        "20",
+                        "0",
+                        "11",
+                        "10",
+                        "21",
+                        "0",
+                        "0",
+                        "CIRCLE",
+                        "10",
+                        "5",
+                        "20",
+                        "5",
+                        "40",
+                        "2,5",
+                        "0",
+                        "ENDSEC",
+                        "0",
+                        "EOF",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            summary, analysis = read_dxf_sheet(path)
+
+        self.assertEqual(summary.size_x_mm, 5.0)
+        self.assertEqual(summary.size_y_mm, 5.0)
+        self.assertEqual(analysis.pierce_count, 1)
+
     def test_maxrects_nesting_uses_rotation_and_multiple_parts(self) -> None:
         analysis = build_sheet_analysis_from_contours(
             (

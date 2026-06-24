@@ -70,6 +70,12 @@ def _parse_entities(pairs: list[tuple[str, str]]) -> tuple[SheetContour, ...]:
             continue
 
         entity = value.upper()
+        if entity == "POLYLINE":
+            contour, index = _polyline_entity(pairs, index, len(contours) + 1)
+            if contour is not None:
+                contours.append(contour)
+            continue
+
         next_index = _next_entity_index(pairs, index + 1)
         entity_pairs = pairs[index + 1 : next_index]
         contour = None
@@ -96,13 +102,51 @@ def _lwpolyline(pairs: list[tuple[str, str]], component_id: int) -> SheetContour
     current_x: float | None = None
     for code, value in pairs:
         if code == "70":
-            closed = int(float(value or 0)) & 1 == 1
+            flag = _to_float(value)
+            closed = int(flag or 0.0) & 1 == 1
         elif code == "10":
-            current_x = float(value)
+            current_x = _to_float(value)
         elif code == "20" and current_x is not None:
-            points.append(SheetPoint(current_x, float(value)))
+            y = _to_float(value)
+            if y is not None:
+                points.append(SheetPoint(current_x, y))
             current_x = None
     return _contour_from_points(points, component_id=component_id, closed=closed)
+
+
+def _polyline_entity(
+    pairs: list[tuple[str, str]],
+    start_index: int,
+    component_id: int,
+) -> tuple[SheetContour | None, int]:
+    header_end = _next_entity_index(pairs, start_index + 1)
+    header_pairs = pairs[start_index + 1 : header_end]
+    closed = False
+    for code, value in header_pairs:
+        if code == "70":
+            flag = _to_float(value)
+            closed = int(flag or 0.0) & 1 == 1
+
+    points: list[SheetPoint] = []
+    index = header_end
+    while index < len(pairs):
+        code, value = pairs[index]
+        if code != "0":
+            index += 1
+            continue
+        entity = value.upper()
+        if entity == "SEQEND":
+            return _contour_from_points(points, component_id=component_id, closed=closed), index + 1
+        if entity != "VERTEX":
+            return _contour_from_points(points, component_id=component_id, closed=closed), index
+
+        next_index = _next_entity_index(pairs, index + 1)
+        values = _entity_values(pairs[index + 1 : next_index])
+        if "10" in values and "20" in values:
+            points.append(SheetPoint(values["10"], values["20"]))
+        index = next_index
+
+    return _contour_from_points(points, component_id=component_id, closed=closed), index
 
 
 def _line(pairs: list[tuple[str, str]], component_id: int) -> SheetContour | None:
@@ -126,6 +170,8 @@ def _circle(pairs: list[tuple[str, str]], component_id: int) -> SheetContour | N
     cx = values["10"]
     cy = values["20"]
     radius = values["40"]
+    if radius <= 0.0:
+        return None
     points = [
         SheetPoint(
             cx + radius * math.cos(math.tau * index / 96),
@@ -139,6 +185,8 @@ def _circle(pairs: list[tuple[str, str]], component_id: int) -> SheetContour | N
 def _arc(pairs: list[tuple[str, str]], component_id: int) -> SheetContour | None:
     values = _entity_values(pairs)
     if not all(key in values for key in ("10", "20", "40", "50", "51")):
+        return None
+    if values["40"] <= 0.0:
         return None
     start = math.radians(values["50"])
     end = math.radians(values["51"])
@@ -165,10 +213,8 @@ def _spline(pairs: list[tuple[str, str]], component_id: int) -> SheetContour | N
     closed = False
     for code, value in pairs:
         if code == "70":
-            try:
-                closed = int(float(value or 0)) & 1 == 1
-            except ValueError:
-                closed = False
+            flag = _to_float(value)
+            closed = int(flag or 0.0) & 1 == 1
 
     points = _sample_spline_polyline(source)
     return _contour_from_points(points, component_id=component_id, closed=closed)
@@ -184,9 +230,11 @@ def _paired_points(
     current_x: float | None = None
     for code, value in pairs:
         if code == x_code:
-            current_x = float(value)
+            current_x = _to_float(value)
         elif code == y_code and current_x is not None:
-            points.append(SheetPoint(current_x, float(value)))
+            y = _to_float(value)
+            if y is not None:
+                points.append(SheetPoint(current_x, y))
             current_x = None
     return points
 
@@ -241,8 +289,17 @@ def _entity_values(pairs: list[tuple[str, str]]) -> dict[str, float]:
     values: dict[str, float] = {}
     for code, value in pairs:
         if code in {"10", "20", "11", "21", "40", "50", "51"}:
-            values[code] = float(value)
+            number = _to_float(value)
+            if number is not None:
+                values[code] = number
     return values
+
+
+def _to_float(value: str) -> float | None:
+    try:
+        return float(value.strip().replace(",", "."))
+    except (AttributeError, ValueError):
+        return None
 
 
 def _contour_from_points(
