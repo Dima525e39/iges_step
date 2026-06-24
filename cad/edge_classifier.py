@@ -892,8 +892,7 @@ def _analyze_round_tube_outer_loops(
             continue
 
         wire_records = _collect_wire_records(face_record, warnings=warnings)
-        cut_edges: list[EdgeRecord] = []
-        loop_count = 0
+        loop_groups: dict[tuple[object, ...], tuple[float, tuple[EdgeRecord, ...]]] = {}
 
         for wire_record in wire_records:
             loop_edges = _round_outer_loop_cut_edges(
@@ -906,8 +905,24 @@ def _analyze_round_tube_outer_loops(
             )
             if not loop_edges:
                 continue
-            loop_count += 1
-            component_id = loop_count
+            loop_length = sum(edge.length_mm for edge in loop_edges)
+            loop_key = _round_loop_group_key(
+                loop_edges,
+                axis=axis,
+                global_bounds=global_bounds,
+                tolerance=tolerance,
+            )
+            current = loop_groups.get(loop_key)
+            if current is not None:
+                current_length, _ = current
+                if _same_round_loop_length(loop_length, current_length, tolerance=tolerance):
+                    if loop_length < current_length:
+                        loop_groups[loop_key] = (loop_length, loop_edges)
+                    continue
+            loop_groups[loop_key] = (loop_length, loop_edges)
+
+        cut_edges: list[EdgeRecord] = []
+        for component_id, (_loop_length, loop_edges) in enumerate(loop_groups.values(), start=1):
             for edge in loop_edges:
                 if _find_same_edge(cut_edges, edge.edge) is not None:
                     continue
@@ -921,6 +936,7 @@ def _analyze_round_tube_outer_loops(
                 edge.cut_component_id = component_id
                 cut_edges.append(edge)
 
+        loop_count = len(loop_groups)
         if cut_edges and loop_count > 0:
             candidates.append(
                 (
@@ -946,6 +962,83 @@ def _analyze_round_tube_outer_loops(
         selected_face=face_record,
         outer_radius_mm=outer_radius,
     )
+
+
+def _round_loop_group_key(
+    edges: tuple[EdgeRecord, ...],
+    *,
+    axis: str,
+    global_bounds: Bounds,
+    tolerance: float,
+) -> tuple[object, ...]:
+    loop_bounds = _combined_edge_bounds(edges)
+    if loop_bounds is None:
+        return ("unknown", id(edges))
+
+    axis_index = AXIS_INDEX[axis]
+    end_side = _bounds_end_side(
+        loop_bounds,
+        axis=axis,
+        global_bounds=global_bounds,
+        tolerance=tolerance,
+    )
+    if end_side is not None:
+        return ("end", end_side)
+
+    grid = max(tolerance * 25.0, 0.5)
+    cross_indexes = [index for index in range(3) if index != axis_index]
+    center_values = [
+        (loop_bounds.mins[index] + loop_bounds.maxes[index]) / 2.0
+        for index in (axis_index, *cross_indexes)
+    ]
+    span_values = [loop_bounds.sizes[index] for index in cross_indexes]
+    return (
+        "feature",
+        *(round(value / grid) for value in center_values),
+        *(round(value / grid) for value in span_values),
+    )
+
+
+def _same_round_loop_length(first: float, second: float, *, tolerance: float) -> bool:
+    smaller = min(first, second)
+    larger = max(first, second)
+    if smaller <= tolerance:
+        return larger <= tolerance
+    return larger / smaller <= 1.25
+
+
+def _combined_edge_bounds(edges: tuple[EdgeRecord, ...]) -> Bounds | None:
+    bounds = [edge.bounds for edge in edges if edge.bounds is not None]
+    if not bounds:
+        return None
+    return Bounds(
+        min(item.xmin for item in bounds),
+        min(item.ymin for item in bounds),
+        min(item.zmin for item in bounds),
+        max(item.xmax for item in bounds),
+        max(item.ymax for item in bounds),
+        max(item.zmax for item in bounds),
+    )
+
+
+def _bounds_end_side(
+    bounds: Bounds,
+    *,
+    axis: str,
+    global_bounds: Bounds,
+    tolerance: float,
+) -> str | None:
+    axis_index = AXIS_INDEX[axis]
+    bound_min = bounds.mins[axis_index]
+    bound_max = bounds.maxes[axis_index]
+    global_min = global_bounds.mins[axis_index]
+    global_max = global_bounds.maxes[axis_index]
+    end_tolerance = max(tolerance * 4.0, 0.05)
+    if abs(bound_min - global_min) <= end_tolerance and abs(bound_max - global_min) <= end_tolerance:
+        return "min"
+    if abs(bound_min - global_max) <= end_tolerance and abs(bound_max - global_max) <= end_tolerance:
+        return "max"
+    return None
 
 
 def _round_tube_outer_radius(
@@ -985,7 +1078,10 @@ def _round_tube_outer_radius(
         return 0.0
 
     outer_radius = distinct[-1]
-    if abs(outer_radius - expected_radius) > radius_tolerance:
+    if (
+        abs(outer_radius - expected_radius) > radius_tolerance
+        and abs(outer_radius * 2.0 - expected_radius) > radius_tolerance
+    ):
         return 0.0
     return outer_radius
 
@@ -1052,6 +1148,9 @@ def _normalize_cylinder_radius(
     half_radius = radius / 2.0
     if abs(half_radius - expected_outer_radius) <= radius_tolerance:
         return half_radius
+    double_radius = radius * 2.0
+    if abs(double_radius - expected_outer_radius) <= radius_tolerance:
+        return radius
     return radius
 
 
