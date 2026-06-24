@@ -81,11 +81,13 @@ def _parse_entities(pairs: list[tuple[str, str]]) -> tuple[SheetContour, ...]:
             contour = _circle(entity_pairs, len(contours) + 1)
         elif entity == "ARC":
             contour = _arc(entity_pairs, len(contours) + 1)
+        elif entity == "SPLINE":
+            contour = _spline(entity_pairs, len(contours) + 1)
         if contour is not None:
             contours.append(contour)
         index = next_index
 
-    return _merge_line_contours(tuple(contours))
+    return _merge_open_contours(tuple(contours))
 
 
 def _lwpolyline(pairs: list[tuple[str, str]], component_id: int) -> SheetContour | None:
@@ -153,6 +155,88 @@ def _arc(pairs: list[tuple[str, str]], component_id: int) -> SheetContour | None
     return _contour_from_points(points, component_id=component_id, closed=False)
 
 
+def _spline(pairs: list[tuple[str, str]], component_id: int) -> SheetContour | None:
+    fit_points = _paired_points(pairs, x_code="11", y_code="21")
+    control_points = _paired_points(pairs, x_code="10", y_code="20")
+    source = fit_points if len(fit_points) >= 2 else control_points
+    if len(source) < 2:
+        return None
+
+    closed = False
+    for code, value in pairs:
+        if code == "70":
+            try:
+                closed = int(float(value or 0)) & 1 == 1
+            except ValueError:
+                closed = False
+
+    points = _sample_spline_polyline(source)
+    return _contour_from_points(points, component_id=component_id, closed=closed)
+
+
+def _paired_points(
+    pairs: list[tuple[str, str]],
+    *,
+    x_code: str,
+    y_code: str,
+) -> list[SheetPoint]:
+    points: list[SheetPoint] = []
+    current_x: float | None = None
+    for code, value in pairs:
+        if code == x_code:
+            current_x = float(value)
+        elif code == y_code and current_x is not None:
+            points.append(SheetPoint(current_x, float(value)))
+            current_x = None
+    return points
+
+
+def _sample_spline_polyline(points: list[SheetPoint]) -> list[SheetPoint]:
+    if len(points) < 3:
+        return points
+    sampled: list[SheetPoint] = []
+    for index in range(len(points) - 1):
+        p0 = points[max(0, index - 1)]
+        p1 = points[index]
+        p2 = points[index + 1]
+        p3 = points[min(len(points) - 1, index + 2)]
+        steps = max(4, int(_distance(p1, p2) / 2.5))
+        for step in range(steps):
+            if sampled and step == 0:
+                continue
+            t = step / steps
+            sampled.append(_catmull_rom(p0, p1, p2, p3, t))
+    sampled.append(points[-1])
+    return sampled
+
+
+def _catmull_rom(
+    p0: SheetPoint,
+    p1: SheetPoint,
+    p2: SheetPoint,
+    p3: SheetPoint,
+    t: float,
+) -> SheetPoint:
+    t2 = t * t
+    t3 = t2 * t
+    return SheetPoint(
+        0.5
+        * (
+            2.0 * p1.x_mm
+            + (-p0.x_mm + p2.x_mm) * t
+            + (2.0 * p0.x_mm - 5.0 * p1.x_mm + 4.0 * p2.x_mm - p3.x_mm) * t2
+            + (-p0.x_mm + 3.0 * p1.x_mm - 3.0 * p2.x_mm + p3.x_mm) * t3
+        ),
+        0.5
+        * (
+            2.0 * p1.y_mm
+            + (-p0.y_mm + p2.y_mm) * t
+            + (2.0 * p0.y_mm - 5.0 * p1.y_mm + 4.0 * p2.y_mm - p3.y_mm) * t2
+            + (-p0.y_mm + 3.0 * p1.y_mm - 3.0 * p2.y_mm + p3.y_mm) * t3
+        ),
+    )
+
+
 def _entity_values(pairs: list[tuple[str, str]]) -> dict[str, float]:
     values: dict[str, float] = {}
     for code, value in pairs:
@@ -176,34 +260,35 @@ def _contour_from_points(
     return SheetContour(points=tuple(clean), length_mm=length, component_id=component_id)
 
 
-def _merge_line_contours(contours: tuple[SheetContour, ...]) -> tuple[SheetContour, ...]:
-    open_lines = [contour for contour in contours if len(contour.points) == 2]
-    others = [contour for contour in contours if len(contour.points) != 2]
-    if len(open_lines) <= 1:
+def _merge_open_contours(contours: tuple[SheetContour, ...]) -> tuple[SheetContour, ...]:
+    open_contours = [contour for contour in contours if not _is_closed_contour(contour)]
+    others = [contour for contour in contours if _is_closed_contour(contour)]
+    if len(open_contours) <= 1:
         return contours
 
     used: set[int] = set()
     merged: list[SheetContour] = list(others)
-    for index, contour in enumerate(open_lines):
+    for index, contour in enumerate(open_contours):
         if index in used:
             continue
         used.add(index)
-        points = [contour.points[0], contour.points[1]]
+        points = list(contour.points)
         changed = True
         while changed:
             changed = False
-            for other_index, other in enumerate(open_lines):
+            for other_index, other in enumerate(open_contours):
                 if other_index in used:
                     continue
-                start, end = other.points
+                other_points = list(other.points)
+                start, end = other_points[0], other_points[-1]
                 if _distance(points[-1], start) <= 0.01:
-                    points.append(end)
+                    points.extend(other_points[1:])
                 elif _distance(points[-1], end) <= 0.01:
-                    points.append(start)
+                    points.extend(reversed(other_points[:-1]))
                 elif _distance(points[0], end) <= 0.01:
-                    points.insert(0, start)
+                    points = other_points[:-1] + points
                 elif _distance(points[0], start) <= 0.01:
-                    points.insert(0, end)
+                    points = list(reversed(other_points[1:])) + points
                 else:
                     continue
                 used.add(other_index)
@@ -213,6 +298,10 @@ def _merge_line_contours(contours: tuple[SheetContour, ...]) -> tuple[SheetConto
         if contour is not None:
             merged.append(contour)
     return tuple(merged)
+
+
+def _is_closed_contour(contour: SheetContour) -> bool:
+    return len(contour.points) >= 3 and _distance(contour.points[0], contour.points[-1]) <= 0.01
 
 
 def _next_entity_index(pairs: list[tuple[str, str]], start: int) -> int:

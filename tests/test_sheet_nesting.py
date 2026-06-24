@@ -72,6 +72,96 @@ class SheetDxfAndNestingTests(unittest.TestCase):
         self.assertGreater(analysis.cut_length_mm, 360.0)
         self.assertEqual(len(analysis.contours), 2)
 
+    def test_dxf_open_curves_are_merged_into_one_pierce(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "spline_outer.dxf"
+            path.write_text(
+                "\n".join(
+                    [
+                        "0",
+                        "SECTION",
+                        "2",
+                        "ENTITIES",
+                        "0",
+                        "LINE",
+                        "8",
+                        "CUT",
+                        "10",
+                        "0",
+                        "20",
+                        "0",
+                        "11",
+                        "100",
+                        "21",
+                        "0",
+                        "0",
+                        "SPLINE",
+                        "8",
+                        "CUT",
+                        "70",
+                        "0",
+                        "10",
+                        "100",
+                        "20",
+                        "0",
+                        "10",
+                        "110",
+                        "20",
+                        "25",
+                        "10",
+                        "100",
+                        "20",
+                        "50",
+                        "0",
+                        "LINE",
+                        "8",
+                        "CUT",
+                        "10",
+                        "100",
+                        "20",
+                        "50",
+                        "11",
+                        "0",
+                        "21",
+                        "50",
+                        "0",
+                        "LINE",
+                        "8",
+                        "CUT",
+                        "10",
+                        "0",
+                        "20",
+                        "50",
+                        "11",
+                        "0",
+                        "21",
+                        "0",
+                        "0",
+                        "CIRCLE",
+                        "8",
+                        "CUT",
+                        "10",
+                        "35",
+                        "20",
+                        "25",
+                        "40",
+                        "5",
+                        "0",
+                        "ENDSEC",
+                        "0",
+                        "EOF",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            _, analysis = read_dxf_sheet(path)
+
+        self.assertEqual(analysis.pierce_count, 2)
+        self.assertEqual(len(analysis.contours), 2)
+        outer = next(contour for contour in analysis.contours if contour.is_outer)
+        self.assertGreater(len(outer.points), 8)
+
     def test_maxrects_nesting_uses_rotation_and_multiple_parts(self) -> None:
         analysis = build_sheet_analysis_from_contours(
             (
