@@ -2,8 +2,16 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from typing import Callable
 
 from cad.sheet_analyzer import SheetAnalysisResult, SheetContour, SheetPoint
+
+ProgressCallback = Callable[[str], None]
+CancelCallback = Callable[[], bool]
+
+
+class NestingCancelled(RuntimeError):
+    pass
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,6 +136,8 @@ class MaxRectsNestingEngine:
         spacing_mm: float = 3.0,
         allow_rotation: bool = True,
         rotation_step_degrees: float = 90.0,
+        progress_callback: ProgressCallback | None = None,
+        should_cancel: CancelCallback | None = None,
     ) -> NestingLayout:
         warnings: list[str] = []
         sheet_width = max(1.0, float(sheet_width_mm))
@@ -137,7 +147,12 @@ class MaxRectsNestingEngine:
         free_by_sheet: list[list[_Rect]] = [[_Rect(0.0, 0.0, sheet_width, sheet_height)]]
         placements_by_sheet: list[list[NestingPlacement]] = [[]]
 
-        for instance in instances:
+        for index, instance in enumerate(instances, start=1):
+            _check_cancelled(should_cancel)
+            _emit_progress(
+                progress_callback,
+                f"Размещение {index}/{len(instances)}: {instance.part.name}",
+            )
             placed = False
             for sheet_index, free_rectangles in enumerate(free_by_sheet):
                 placement, used_rect = _find_best_position(
@@ -222,6 +237,8 @@ class TrueShapeNestingEngine:
         spacing_mm: float = 3.0,
         allow_rotation: bool = True,
         rotation_step_degrees: float = 90.0,
+        progress_callback: ProgressCallback | None = None,
+        should_cancel: CancelCallback | None = None,
     ) -> NestingLayout:
         warnings: list[str] = []
         sheet_width = max(1.0, float(sheet_width_mm))
@@ -230,7 +247,12 @@ class TrueShapeNestingEngine:
         instances = sorted(_expand_parts(parts), key=lambda item: item.sort_key)
         placements_by_sheet: list[list[NestingPlacement]] = [[]]
 
-        for instance in instances:
+        for index, instance in enumerate(instances, start=1):
+            _check_cancelled(should_cancel)
+            _emit_progress(
+                progress_callback,
+                f"True-shape {index}/{len(instances)}: {instance.part.name}",
+            )
             placement = _find_true_shape_position(
                 instance.part,
                 placements_by_sheet,
@@ -239,6 +261,7 @@ class TrueShapeNestingEngine:
                 spacing_mm=spacing,
                 allow_rotation=allow_rotation,
                 rotation_step_degrees=rotation_step_degrees,
+                should_cancel=should_cancel,
             )
             if placement is None:
                 sheet_index = len(placements_by_sheet)
@@ -251,6 +274,7 @@ class TrueShapeNestingEngine:
                     spacing_mm=spacing,
                     allow_rotation=allow_rotation,
                     rotation_step_degrees=rotation_step_degrees,
+                    should_cancel=should_cancel,
                 )
                 if placement is None:
                     warnings.append(
@@ -357,8 +381,10 @@ def _find_true_shape_position(
     spacing_mm: float,
     allow_rotation: bool,
     rotation_step_degrees: float,
+    should_cancel: CancelCallback | None = None,
 ) -> NestingPlacement | None:
     for sheet_index, placements in enumerate(placements_by_sheet):
+        _check_cancelled(should_cancel)
         placement = _find_true_shape_position_on_sheet(
             part,
             tuple(placements),
@@ -368,6 +394,7 @@ def _find_true_shape_position(
             spacing_mm=spacing_mm,
             allow_rotation=allow_rotation,
             rotation_step_degrees=rotation_step_degrees,
+            should_cancel=should_cancel,
         )
         if placement is not None:
             return placement
@@ -384,6 +411,7 @@ def _find_true_shape_position_on_sheet(
     spacing_mm: float,
     allow_rotation: bool,
     rotation_step_degrees: float,
+    should_cancel: CancelCallback | None = None,
 ) -> NestingPlacement | None:
     options = _rotation_options(
         part,
@@ -395,6 +423,7 @@ def _find_true_shape_position_on_sheet(
     existing_polygons = tuple(_placement_outer_polygon(item) for item in existing_placements)
 
     for rotation, width, height in options:
+        _check_cancelled(should_cancel)
         if width > sheet_width_mm + 0.001 or height > sheet_height_mm + 0.001:
             continue
         for x, y in _true_shape_candidate_positions(
@@ -406,6 +435,7 @@ def _find_true_shape_position_on_sheet(
             sheet_height_mm=sheet_height_mm,
             spacing_mm=spacing_mm,
         ):
+            _check_cancelled(should_cancel)
             placement = NestingPlacement(
                 part=part,
                 sheet_index=sheet_index,
@@ -427,6 +457,7 @@ def _find_true_shape_position_on_sheet(
                     polygon,
                     existing,
                     spacing_mm=spacing_mm,
+                    should_cancel=should_cancel,
                 )
                 for existing in existing_polygons
             ):
@@ -441,6 +472,16 @@ def _find_true_shape_position_on_sheet(
                 best = (score, placement)
 
     return best[1] if best is not None else None
+
+
+def _emit_progress(callback: ProgressCallback | None, message: str) -> None:
+    if callback is not None:
+        callback(message)
+
+
+def _check_cancelled(callback: CancelCallback | None) -> None:
+    if callback is not None and callback():
+        raise NestingCancelled("Nesting calculation was cancelled.")
 
 
 def _true_shape_candidate_positions(
@@ -673,6 +714,7 @@ def _polygons_conflict(
     second: tuple[SheetPoint, ...],
     *,
     spacing_mm: float,
+    should_cancel: CancelCallback | None = None,
 ) -> bool:
     if not _rectangles_close(_polygon_bounds(first), _polygon_bounds(second), spacing_mm):
         return False
@@ -680,7 +722,9 @@ def _polygons_conflict(
     first_segments = tuple(zip(first, first[1:], strict=False))
     second_segments = tuple(zip(second, second[1:], strict=False))
     for first_start, first_end in first_segments:
+        _check_cancelled(should_cancel)
         for second_start, second_end in second_segments:
+            _check_cancelled(should_cancel)
             if _segments_intersect(first_start, first_end, second_start, second_end):
                 return True
             if spacing_mm > 0.0 and _segment_distance(
