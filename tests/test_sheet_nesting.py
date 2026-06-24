@@ -7,7 +7,7 @@ from pathlib import Path
 from cad.dxf_reader import read_dxf_sheet
 from cad.sheet_analyzer import SheetContour, SheetPoint, build_sheet_analysis_from_contours
 from export.vector_exporter import export_nesting_dxf, export_sheet_svg
-from nesting.core import MaxRectsNestingEngine, NestingPart
+from nesting.core import MaxRectsNestingEngine, NestingPart, TrueShapeNestingEngine
 
 
 class SheetDxfAndNestingTests(unittest.TestCase):
@@ -137,6 +137,41 @@ class SheetDxfAndNestingTests(unittest.TestCase):
         self.assertAlmostEqual(layout.placements[0].rotation_deg, 45.0)
         self.assertLessEqual(layout.placements[0].width_mm, 100.0)
         self.assertLessEqual(layout.placements[0].height_mm, 100.0)
+
+    def test_true_shape_nesting_interlocks_l_shaped_parts(self) -> None:
+        analysis = build_sheet_analysis_from_contours(
+            (
+                SheetContour(
+                    points=(
+                        SheetPoint(0.0, 0.0),
+                        SheetPoint(60.0, 0.0),
+                        SheetPoint(60.0, 20.0),
+                        SheetPoint(20.0, 20.0),
+                        SheetPoint(20.0, 60.0),
+                        SheetPoint(0.0, 60.0),
+                        SheetPoint(0.0, 0.0),
+                    ),
+                    length_mm=240.0,
+                    component_id=1,
+                ),
+            ),
+            width_mm=60.0,
+            height_mm=60.0,
+            thickness_mm=2.0,
+        )
+
+        layout = TrueShapeNestingEngine().nest(
+            (NestingPart.from_sheet_analysis(name="l-part", analysis=analysis, quantity=2),),
+            sheet_width_mm=80.2,
+            sheet_height_mm=80.2,
+            spacing_mm=0.1,
+            allow_rotation=True,
+            rotation_step_degrees=90.0,
+        )
+
+        self.assertEqual(layout.sheet_count, 1)
+        self.assertEqual(len(layout.placements), 2)
+        self.assertTrue(any(abs(item.rotation_deg - 180.0) <= 0.001 for item in layout.placements))
 
     def test_exports_sheet_svg_and_nesting_dxf(self) -> None:
         analysis = build_sheet_analysis_from_contours(

@@ -23,7 +23,13 @@ from PySide6.QtWidgets import (
 
 from core.file_job import FileJob
 from export.vector_exporter import export_nesting_dxf, export_nesting_svg
-from nesting.core import MaxRectsNestingEngine, NestingLayout, NestingPart, transformed_contours
+from nesting.core import (
+    MaxRectsNestingEngine,
+    NestingLayout,
+    NestingPart,
+    TrueShapeNestingEngine,
+    transformed_contours,
+)
 from ui.zoom_graphics_view import ZoomGraphicsView
 
 
@@ -83,6 +89,8 @@ class NestingDialog(QDialog):
         self.spacing_input.setSingleStep(0.5)
         self.rotate_checkbox = QCheckBox("Разрешить поворот")
         self.rotate_checkbox.setChecked(True)
+        self.true_shape_checkbox = QCheckBox("True-shape / NFP")
+        self.true_shape_checkbox.setChecked(True)
         self.rotation_step_input = QDoubleSpinBox()
         self.rotation_step_input.setRange(1.0, 90.0)
         self.rotation_step_input.setValue(5.0)
@@ -91,6 +99,7 @@ class NestingDialog(QDialog):
         form.addRow("Ширина листа", self.sheet_width_input)
         form.addRow("Высота листа", self.sheet_height_input)
         form.addRow("Зазор", self.spacing_input)
+        form.addRow(self.true_shape_checkbox)
         form.addRow(self.rotate_checkbox)
         form.addRow("Шаг угла", self.rotation_step_input)
         layout.addLayout(form)
@@ -145,7 +154,12 @@ class NestingDialog(QDialog):
             self.summary_label.setText("Нет импортированных DXF/листовых деталей.")
             self.scene.clear()
             return
-        self.layout_result = MaxRectsNestingEngine().nest(
+        engine = (
+            TrueShapeNestingEngine()
+            if self.true_shape_checkbox.isChecked()
+            else MaxRectsNestingEngine()
+        )
+        self.layout_result = engine.nest(
             self.parts,
             sheet_width_mm=self.sheet_width_input.value(),
             sheet_height_mm=self.sheet_height_input.value(),

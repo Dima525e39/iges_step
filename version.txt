@@ -1,3 +1,3 @@
-TubeCutCalculator v0.5.3
+TubeCutCalculator v0.5.4
 Build date: 2026-06-24
-Description: Adds arbitrary-angle nesting rotation with configurable angle step; keeps v0.5.2 round-tube diameter/thickness normalization and v0.5.1 quantity/zoom/export fixes.
+Description: Adds first true-shape/NFP-like nesting engine with contour collision checks, arbitrary angle step rotation, and real-contour area efficiency.
