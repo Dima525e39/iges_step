@@ -9,6 +9,7 @@ from core.file_job import FileJob
 
 CSV_HEADERS = [
     "Файл",
+    "Материал",
     "Размер",
     "Толщина",
     "Длина",

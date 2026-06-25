@@ -7,6 +7,7 @@ from typing import Any
 @dataclass(slots=True)
 class TubePurchaseSettings:
     standard_stock_length_mm: float = 6000.0
+    chuck_remainder_mm: float = 300.0
     stock_allowance_percent: float = 3.0
     end_trim_allowance_mm: float = 0.0
     useful_remainder_min_mm: float = 300.0
@@ -26,6 +27,7 @@ class TubePurchaseSettings:
             standard_stock_length_mm=float(
                 data.get("standard_stock_length_mm", 6000.0) or 6000.0
             ),
+            chuck_remainder_mm=float(data.get("chuck_remainder_mm", 300.0) or 0.0),
             stock_allowance_percent=float(data.get("stock_allowance_percent", 3.0) or 0.0),
             end_trim_allowance_mm=float(data.get("end_trim_allowance_mm", 0.0) or 0.0),
             useful_remainder_min_mm=float(
@@ -42,6 +44,7 @@ class TubePurchaseSettings:
     def to_dict(self) -> dict[str, Any]:
         return {
             "standard_stock_length_mm": self.standard_stock_length_mm,
+            "chuck_remainder_mm": self.chuck_remainder_mm,
             "stock_allowance_percent": self.stock_allowance_percent,
             "end_trim_allowance_mm": self.end_trim_allowance_mm,
             "useful_remainder_min_mm": self.useful_remainder_min_mm,

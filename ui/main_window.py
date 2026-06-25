@@ -50,10 +50,11 @@ from export.print_manager import print_html
 from export.report_html import calculation_table_html, commercial_offer_html, technical_report_html
 from export.vector_exporter import export_sheet_dxf, export_sheet_svg
 from pricing.price_selector import calculate_job_price
+from pricing.material_cost import calculate_tube_material_cost
 from purchase.tube_grouping import number_from_text
 from purchase.tube_purchase_calculator import TubePurchaseRow, calculate_tube_purchase
 from settings.contractors_manager import default_contractor
-from settings.materials_manager import default_material
+from settings.materials_manager import default_material, materials_from_settings
 from settings.settings_manager import SettingsManager
 from settings.tube_purchase_settings import TubePurchaseSettings
 from ui.commercial_offer_dialog import CommercialOfferDialog
@@ -66,6 +67,7 @@ from ui.geometry_debug_dialog import GeometryDebugDialog
 from ui.import_worker import CadImportWorker
 from ui.invoice_export_dialog import InvoiceExportDialog
 from ui.logo_dialog import LogoDialog
+from ui.material_selection_dialog import MaterialSelectionDialog
 from ui.materials_dialog import MaterialsDialog
 from ui.nesting_dialog import NestingDialog
 from ui.pricing_dialog import PricingDialog
@@ -233,6 +235,7 @@ class MainWindow(QMainWindow):
         self.param_auxiliary_unfold = self._value_label()
         self.param_debug_edges = self._value_label()
         self.param_material = self._value_label()
+        self.param_customer_tube = self._value_label()
         self.param_contractor = self._value_label()
         self.param_price_rule = self._value_label()
         self.param_price = self._value_label()
@@ -253,6 +256,7 @@ class MainWindow(QMainWindow):
         params_layout.addRow("Вспом. линии", self.param_auxiliary_unfold)
         params_layout.addRow("debug_edges.csv", self.param_debug_edges)
         params_layout.addRow("Материал", self.param_material)
+        params_layout.addRow("Труба заказчика", self.param_customer_tube)
         params_layout.addRow("Контрагент", self.param_contractor)
         params_layout.addRow("Правило цены", self.param_price_rule)
         params_layout.addRow("Стоимость", self.param_price)
@@ -375,6 +379,7 @@ class MainWindow(QMainWindow):
         self.file_table.pathsDropped.connect(self._add_paths)
         self.file_table.quantityChanged.connect(self._on_job_quantity_changed)
         self.file_table.thicknessChanged.connect(self._on_job_thickness_changed)
+        self.file_table.materialChanged.connect(self._on_job_material_changed)
         self.diagnostic_table.quantityChanged.connect(self._on_job_quantity_changed)
         self.file_table.itemSelectionChanged.connect(self._sync_from_table_selection)
         self.diagnostic_table.itemSelectionChanged.connect(self._sync_from_diagnostic_selection)
@@ -399,7 +404,7 @@ class MainWindow(QMainWindow):
 
     def _add_paths(self, paths: list[str]) -> None:
         result = self.queue.add_paths(paths)
-        self._apply_default_settings_to_jobs(result.added)
+        self._apply_default_settings_to_jobs(result.added, force=True)
         self._refresh_jobs()
         self._show_add_result(result)
 
@@ -415,14 +420,19 @@ class MainWindow(QMainWindow):
         if messages:
             QMessageBox.warning(self, "Добавление файлов", "\n".join(messages[:20]))
 
-    def _apply_default_settings_to_jobs(self, jobs: list[FileJob]) -> None:
+    def _apply_default_settings_to_jobs(self, jobs: list[FileJob], *, force: bool = False) -> None:
         settings = self.settings_manager.as_dict()
         contractor = default_contractor(settings)
         material = default_material(settings)
+        material_names = {item.name for item in materials_from_settings(settings) if item.active}
+        if material.name:
+            material_names.add(material.name)
         for job in jobs:
-            job.contractor = contractor.name
+            if force or not job.contractor:
+                job.contractor = contractor.name
             job.currency = contractor.currency
-            job.material = material.name
+            if force or not job.material or job.material not in material_names:
+                job.material = material.name
 
     def _clear_jobs(self) -> None:
         if len(self.queue) == 0:
@@ -459,7 +469,12 @@ class MainWindow(QMainWindow):
         if len(self.queue) == 0:
             QMessageBox.information(self, "Импорт", "Список файлов пуст.")
             return
-        self._start_import([job.normalized_path for job in self.queue.jobs()])
+        jobs = self.queue.jobs()
+        material, customer_tube = self._choose_material_for_bulk_processing(jobs)
+        if not material:
+            return
+        self._set_material_for_jobs(jobs, material, customer_tube=customer_tube)
+        self._start_import([job.normalized_path for job in jobs])
 
     def _save_project(self) -> None:
         target_path, _ = QFileDialog.getSaveFileName(
@@ -776,9 +791,70 @@ class MainWindow(QMainWindow):
             cut_length_mm=cut_length,
             pierce_count=pierce_count,
         )
-        job.price = f"{result.total * quantity:.2f}"
+        material_result = calculate_tube_material_cost(
+            self.settings_manager.as_dict(),
+            material=job.material,
+            tube_length_mm=number_from_text(job.tube_length_mm)
+            or float(getattr(analysis, "length_mm", 0.0) or 0.0),
+            quantity=quantity,
+            customer_tube=job.customer_tube,
+        )
+        job.price = f"{result.total * quantity + material_result.total:.2f}"
         job.currency = result.currency
-        job.price_warning = result.selection.warning
+        job.price_warning = _join_warnings(
+            result.selection.warning,
+            material_result.warning,
+        )
+
+    def _on_job_material_changed(self, path: str, material: str) -> None:
+        job = self.queue.get(path)
+        if job is None or job.material == material:
+            return
+        self._set_material_for_jobs([job], material)
+        self._refresh_jobs()
+
+    def _choose_material_for_bulk_processing(self, jobs: list[FileJob]) -> tuple[str, bool]:
+        current_material = ""
+        if jobs:
+            current_material = jobs[0].material
+        dialog = MaterialSelectionDialog(
+            self._material_choices(),
+            current_material=current_material,
+            parent=self,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return "", True
+        return dialog.selected_material(), dialog.is_customer_tube()
+
+    def _set_material_for_jobs(
+        self,
+        jobs: list[FileJob],
+        material: str,
+        *,
+        customer_tube: bool | None = None,
+    ) -> None:
+        if not material:
+            return
+        for job in jobs:
+            material_changed = job.material != material
+            customer_tube_changed = (
+                customer_tube is not None and job.customer_tube != customer_tube
+            )
+            if not material_changed and not customer_tube_changed:
+                continue
+            job.material = material
+            if customer_tube is not None:
+                job.customer_tube = customer_tube
+            analysis = self.shape_analyses.get(job.normalized_path)
+            if analysis is not None:
+                old_warning = job.price_warning
+                if old_warning:
+                    job.warnings = [
+                        warning for warning in job.warnings if warning != old_warning
+                    ]
+                self._update_job_price(job, analysis)
+                if job.price_warning and job.price_warning not in job.warnings:
+                    job.warnings.append(job.price_warning)
 
     def _format_analysis_summary(self, analysis: object) -> str:
         return (
@@ -869,12 +945,22 @@ class MainWindow(QMainWindow):
 
     def _refresh_jobs(self) -> None:
         jobs = self.queue.jobs()
+        self.file_table.set_materials(self._material_choices())
         self.file_table.set_jobs(jobs)
         self.diagnostic_table.set_jobs(jobs)
         self._refresh_compact_list(jobs)
         self._refresh_purchase()
         self._refresh_summary()
         self._show_selected_job(self._current_job())
+
+    def _material_choices(self) -> list[str]:
+        settings = self.settings_manager.as_dict()
+        materials = materials_from_settings(settings)
+        choices = [material.name for material in materials if material.active]
+        default = default_material(settings).name
+        if default and default not in choices:
+            choices.insert(0, default)
+        return choices
 
     def _refresh_purchase(self) -> None:
         self.purchase_rows = calculate_tube_purchase(
@@ -1021,7 +1107,7 @@ class MainWindow(QMainWindow):
             )
 
         if job is None:
-            values = ["—"] * 20
+            values = ["—"] * 21
             warnings = "—"
         else:
             values = [
@@ -1042,6 +1128,7 @@ class MainWindow(QMainWindow):
                 job.auxiliary_unfold_edges,
                 job.debug_edges_path or "—",
                 job.material,
+                "да" if job.customer_tube else "нет",
                 job.contractor,
                 job.price_warning or "точное/дефолтное правило",
                 job.formatted_price,
@@ -1066,6 +1153,7 @@ class MainWindow(QMainWindow):
             self.param_auxiliary_unfold,
             self.param_debug_edges,
             self.param_material,
+            self.param_customer_tube,
             self.param_contractor,
             self.param_price_rule,
             self.param_price,
@@ -1382,3 +1470,7 @@ class MainWindow(QMainWindow):
     def _apply_current_theme(self) -> None:
         theme = str(self.settings_manager.get("ui", "theme", default="light") or "light")
         apply_theme(self, theme)
+
+
+def _join_warnings(*warnings: str) -> str:
+    return "\n".join(warning for warning in warnings if warning)

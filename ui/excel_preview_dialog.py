@@ -18,6 +18,7 @@ from export.excel_exporter import calculation_detail_rows
 class ExcelPreviewDialog(QDialog):
     HEADERS = [
         "Файл",
+        "Материал",
         "Размер",
         "Толщина",
         "Длина",

@@ -9,6 +9,7 @@ from core.file_job import FileJob, STATUS_IMPORTED
 from export.excel_exporter import export_excel_workbook
 from export.json_project import load_project, save_project
 from export.report_html import commercial_offer_html
+from pricing.material_cost import calculate_tube_material_cost
 from pricing.price_selector import calculate_job_price
 from purchase.tube_purchase_calculator import calculate_tube_purchase
 
@@ -55,6 +56,47 @@ class PricingPurchaseProjectTests(unittest.TestCase):
 
         self.assertEqual(result.selection.source, "точное правило")
         self.assertAlmostEqual(result.total, 219.45)
+
+    def test_material_cost_is_zero_for_customer_tube(self) -> None:
+        result = calculate_tube_material_cost(
+            {
+                "materials": [
+                    {"id": "steel", "name": "Сталь", "tube_price_per_meter": 1000.0}
+                ]
+            },
+            material="Сталь",
+            tube_length_mm=1000.0,
+            quantity=2,
+            customer_tube=True,
+        )
+
+        self.assertEqual(result.total, 0.0)
+
+    def test_material_cost_uses_material_price_and_purchase_allowances(self) -> None:
+        result = calculate_tube_material_cost(
+            {
+                "materials": [
+                    {
+                        "id": "steel",
+                        "name": "Сталь",
+                        "standard_stock_length_mm": 6000.0,
+                        "tube_price_per_meter": 1000.0,
+                    }
+                ],
+                "purchase": {
+                    "stock_allowance_percent": 10.0,
+                    "include_part_gap": False,
+                    "chuck_remainder_mm": 0.0,
+                },
+            },
+            material="Сталь",
+            tube_length_mm=1000.0,
+            quantity=2,
+            customer_tube=False,
+        )
+
+        self.assertAlmostEqual(result.unit, 1100.0)
+        self.assertAlmostEqual(result.total, 2200.0)
 
     def test_purchase_groups_different_tube_sizes_separately(self) -> None:
         first = FileJob(Path("a.step"), status=STATUS_IMPORTED)
@@ -115,6 +157,72 @@ class PricingPurchaseProjectTests(unittest.TestCase):
         self.assertEqual(rows[0].detail_count, 3)
         self.assertEqual(rows[0].detail_length_mm, 3000.0)
 
+    def test_purchase_uses_chuck_remainder_as_unusable_stock_length(self) -> None:
+        first = FileJob(Path("a.step"), status=STATUS_IMPORTED)
+        first.material = "Сталь"
+        first.tube_type = "профильная труба"
+        first.tube_size = "60.0×60.0"
+        first.wall_thickness_mm = "4.0 мм"
+        first.tube_length_mm = "3000.0 мм"
+        first.quantity = 2
+
+        rows = calculate_tube_purchase(
+            [first],
+            {
+                "materials": [
+                    {
+                        "id": "steel",
+                        "name": "Сталь",
+                        "standard_stock_length_mm": 6000.0,
+                        "is_default": True,
+                    }
+                ],
+                "purchase": {
+                    "standard_stock_length_mm": 6000.0,
+                    "chuck_remainder_mm": 300.0,
+                    "stock_allowance_percent": 0.0,
+                    "include_part_gap": False,
+                    "end_trim_allowance_mm": 0.0,
+                },
+            },
+        )
+
+        self.assertEqual(rows[0].stock_count, 2)
+        self.assertEqual(rows[0].purchase_length_mm, 12000.0)
+        self.assertIn("полезная длина хлыста 5700.0 мм", rows[0].warnings)
+
+    def test_purchase_packs_parts_by_detail_lengths(self) -> None:
+        first = FileJob(Path("a.step"), status=STATUS_IMPORTED)
+        first.material = "Сталь"
+        first.tube_type = "профильная труба"
+        first.tube_size = "60.0×60.0"
+        first.wall_thickness_mm = "4.0 мм"
+        first.tube_length_mm = "3500.0 мм"
+        first.quantity = 3
+
+        rows = calculate_tube_purchase(
+            [first],
+            {
+                "materials": [
+                    {
+                        "id": "steel",
+                        "name": "Сталь",
+                        "standard_stock_length_mm": 6000.0,
+                        "is_default": True,
+                    }
+                ],
+                "purchase": {
+                    "standard_stock_length_mm": 6000.0,
+                    "chuck_remainder_mm": 0.0,
+                    "stock_allowance_percent": 0.0,
+                    "include_part_gap": False,
+                    "end_trim_allowance_mm": 0.0,
+                },
+            },
+        )
+
+        self.assertEqual(rows[0].stock_count, 3)
+
     def test_file_job_table_row_keeps_thickness_separate(self) -> None:
         job = FileJob(Path("tube.step"), status=STATUS_IMPORTED)
         job.tube_size = "Ø35.0"
@@ -129,6 +237,7 @@ class PricingPurchaseProjectTests(unittest.TestCase):
             job.to_table_row(),
             [
                 "tube.step",
+                "Сталь",
                 "Ø35.0",
                 "2.5 мм",
                 "1000.0 мм",
@@ -161,6 +270,34 @@ class PricingPurchaseProjectTests(unittest.TestCase):
         self.assertIn("Итого", sheet)
         self.assertIn("814.4 мм", sheet)
         self.assertIn("1200.00 руб.", sheet)
+
+    def test_purchase_groups_same_tube_by_material(self) -> None:
+        first = FileJob(Path("steel.step"), status=STATUS_IMPORTED)
+        first.material = "Сталь"
+        first.tube_type = "Круглая труба"
+        first.tube_size = "Ø35.0"
+        first.wall_thickness_mm = "2.5 мм"
+        first.tube_length_mm = "1000.0 мм"
+
+        second = FileJob(Path("inox.step"), status=STATUS_IMPORTED)
+        second.material = "Нержавейка"
+        second.tube_type = first.tube_type
+        second.tube_size = first.tube_size
+        second.wall_thickness_mm = first.wall_thickness_mm
+        second.tube_length_mm = first.tube_length_mm
+
+        rows = calculate_tube_purchase(
+            [first, second],
+            {
+                "materials": [
+                    {"id": "steel", "name": "Сталь", "is_default": True},
+                    {"id": "inox", "name": "Нержавейка"},
+                ],
+                "purchase": {"standard_stock_length_mm": 6000.0},
+            },
+        )
+
+        self.assertEqual({row.material for row in rows}, {"Сталь", "Нержавейка"})
 
     def test_invoice_html_uses_requisites_and_hides_disabled_logo(self) -> None:
         job = FileJob(Path("tube.step"), status=STATUS_IMPORTED)

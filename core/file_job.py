@@ -57,6 +57,7 @@ class FileJob:
     debug_edges_path: str = ""
     debug_faces_path: str = ""
     material: str = "Сталь"
+    customer_tube: bool = True
     contractor: str = "По умолчанию"
     quantity: int = 1
     currency: str = "руб."
@@ -76,6 +77,7 @@ class FileJob:
     def to_table_row(self) -> list[str]:
         return [
             self.name,
+            self.material,
             self.tube_size,
             self.wall_thickness_mm,
             self.tube_length_mm,
@@ -138,6 +140,7 @@ class FileJob:
             "debug_edges_path": self.debug_edges_path,
             "debug_faces_path": self.debug_faces_path,
             "material": self.material,
+            "customer_tube": self.customer_tube,
             "contractor": self.contractor,
             "quantity": self.quantity,
             "currency": self.currency,
@@ -177,6 +180,7 @@ class FileJob:
             debug_edges_path=str(data.get("debug_edges_path", "")),
             debug_faces_path=str(data.get("debug_faces_path", "")),
             material=str(data.get("material", "Сталь")),
+            customer_tube=bool(data.get("customer_tube", True)),
             contractor=str(data.get("contractor", "По умолчанию")),
             quantity=max(1, int(data.get("quantity", 1) or 1)),
             currency=str(data.get("currency", "руб.")),

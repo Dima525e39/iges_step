@@ -98,6 +98,7 @@
   },
   "purchase": {
     "standard_stock_length_mm": 6000.0,
+    "chuck_remainder_mm": 300.0,
     "stock_allowance_percent": 3.0,
     "end_trim_allowance_mm": 0.0,
     "useful_remainder_min_mm": 300.0,

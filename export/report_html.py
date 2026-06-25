@@ -283,6 +283,7 @@ def _details_table(jobs: list[FileJob], *, technical: bool = False) -> str:
     headers = [
         "№",
         "Файл",
+        "Материал",
         "Размер",
         "Толщина",
         "Длина",
@@ -298,6 +299,7 @@ def _details_table(jobs: list[FileJob], *, technical: bool = False) -> str:
         values = [
             str(index),
             job.name,
+            job.material,
             job.tube_size,
             job.wall_thickness_mm,
             job.tube_length_mm,

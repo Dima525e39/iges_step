@@ -22,6 +22,7 @@ class TubePurchaseSettingsDialog(QDialog):
         data = TubePurchaseSettings.from_settings(settings_manager.as_dict())
 
         self.stock_length = _spin(data.standard_stock_length_mm, 100.0, 100000.0, " мм")
+        self.chuck_remainder = _spin(data.chuck_remainder_mm, 0.0, 100000.0, " мм")
         self.stock_percent = _spin(data.stock_allowance_percent, 0.0, 1000.0, " %")
         self.end_trim = _spin(data.end_trim_allowance_mm, 0.0, 10000.0, " мм")
         self.useful_remainder = _spin(data.useful_remainder_min_mm, 0.0, 100000.0, " мм")
@@ -39,6 +40,7 @@ class TubePurchaseSettingsDialog(QDialog):
 
         form = QFormLayout()
         form.addRow("Стандартная длина хлыста", self.stock_length)
+        form.addRow("Остаток в патроне станка", self.chuck_remainder)
         form.addRow("Запас на резку", self.stock_percent)
         form.addRow("Запас на торцовку/ошибки", self.end_trim)
         form.addRow("Минимальный полезный остаток", self.useful_remainder)
@@ -62,6 +64,7 @@ class TubePurchaseSettingsDialog(QDialog):
     def _save(self) -> None:
         data = TubePurchaseSettings(
             standard_stock_length_mm=self.stock_length.value(),
+            chuck_remainder_mm=self.chuck_remainder.value(),
             stock_allowance_percent=self.stock_percent.value(),
             end_trim_allowance_mm=self.end_trim.value(),
             useful_remainder_min_mm=self.useful_remainder.value(),

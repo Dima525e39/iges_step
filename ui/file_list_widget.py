@@ -3,7 +3,13 @@ from __future__ import annotations
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QDragEnterEvent, QDragLeaveEvent, QDragMoveEvent, QDropEvent
 from PySide6.QtGui import QColor
-from PySide6.QtWidgets import QAbstractItemView, QHeaderView, QTableWidget, QTableWidgetItem
+from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QComboBox,
+    QHeaderView,
+    QTableWidget,
+    QTableWidgetItem,
+)
 
 from core.file_job import STATUS_ERROR, STATUS_IMPORTED, STATUS_IMPORTING, STATUS_PENDING, FileJob
 from ui.drop_helpers import local_paths_from_mime_data
@@ -13,9 +19,11 @@ class FileListWidget(QTableWidget):
     pathsDropped = Signal(list)
     quantityChanged = Signal(str, int)
     thicknessChanged = Signal(str, float)
+    materialChanged = Signal(str, str)
 
     HEADERS = [
         "Файл",
+        "Материал",
         "Размер",
         "Толщина",
         "Длина",
@@ -70,6 +78,11 @@ class FileListWidget(QTableWidget):
         self.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         self.horizontalHeader().setStretchLastSection(True)
         self.itemChanged.connect(self._on_item_changed)
+        self._materials = ["Сталь"]
+
+    def set_materials(self, materials: list[str]) -> None:
+        cleaned = [material for material in materials if material]
+        self._materials = cleaned or ["Сталь"]
 
     def set_jobs(self, jobs: list[FileJob]) -> None:
         selected_paths = set(self.selected_paths())
@@ -94,6 +107,8 @@ class FileListWidget(QTableWidget):
                     item.setBackground(color)
                     item.setForeground(QColor("#111827"))
                 self.setItem(row, column, item)
+                if not self.diagnostic and self._is_material_column(column):
+                    self.setCellWidget(row, column, self._make_material_combo(job))
 
             if job.normalized_path in selected_paths:
                 self.selectRow(row)
@@ -157,6 +172,24 @@ class FileListWidget(QTableWidget):
             return False
         headers = self.HEADERS
         return 0 <= column < len(headers) and headers[column] == "Толщина"
+
+    def _is_material_column(self, column: int) -> bool:
+        if self.diagnostic:
+            return False
+        return 0 <= column < len(self.HEADERS) and self.HEADERS[column] == "Материал"
+
+    def _make_material_combo(self, job: FileJob) -> QComboBox:
+        combo = QComboBox(self)
+        values = list(self._materials)
+        if job.material and job.material not in values:
+            values.insert(0, job.material)
+        combo.addItems(values)
+        if job.material:
+            combo.setCurrentText(job.material)
+        combo.currentTextChanged.connect(
+            lambda text, path=job.normalized_path: self.materialChanged.emit(path, text)
+        )
+        return combo
 
     def _on_item_changed(self, item: QTableWidgetItem) -> None:
         path = str(item.data(Qt.ItemDataRole.UserRole) or "")

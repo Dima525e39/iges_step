@@ -1,0 +1,56 @@
+from __future__ import annotations
+
+from PySide6.QtWidgets import (
+    QCheckBox,
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QFormLayout,
+    QLabel,
+    QVBoxLayout,
+    QWidget,
+)
+
+
+class MaterialSelectionDialog(QDialog):
+    def __init__(
+        self,
+        materials: list[str],
+        *,
+        current_material: str = "",
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Материал для обработки")
+        self.setMinimumWidth(360)
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel("Выберите материал, который будет назначен всем файлам."))
+
+        self.material_combo = QComboBox()
+        values = [material for material in materials if material]
+        if current_material and current_material not in values:
+            values.insert(0, current_material)
+        self.material_combo.addItems(values or ["Сталь"])
+        if current_material:
+            self.material_combo.setCurrentText(current_material)
+
+        form = QFormLayout()
+        form.addRow("Материал:", self.material_combo)
+        self.customer_tube_checkbox = QCheckBox("Труба заказчика")
+        self.customer_tube_checkbox.setChecked(True)
+        form.addRow("", self.customer_tube_checkbox)
+        layout.addLayout(form)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def selected_material(self) -> str:
+        return self.material_combo.currentText().strip()
+
+    def is_customer_tube(self) -> bool:
+        return self.customer_tube_checkbox.isChecked()

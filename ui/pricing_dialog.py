@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from PySide6.QtWidgets import (
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QHBoxLayout,
@@ -10,6 +11,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from settings.materials_manager import default_material, materials_from_settings
 from settings.pricing_manager import PriceRule, pricing_rules_from_settings
 from settings.settings_manager import SettingsManager
 
@@ -37,6 +39,7 @@ class PricingDialog(QDialog):
         self.table = QTableWidget()
         self.table.setColumnCount(len(self.HEADERS))
         self.table.setHorizontalHeaderLabels(self.HEADERS)
+        self.materials = self._material_choices()
 
         add_button = QPushButton("Добавить")
         remove_button = QPushButton("Удалить")
@@ -77,14 +80,32 @@ class PricingDialog(QDialog):
                 "да" if rule.is_default else "",
             ]
             for column, value in enumerate(values):
-                self.table.setItem(row, column, QTableWidgetItem(value))
+                if column == 1:
+                    self._set_material_combo(row, value)
+                else:
+                    self.table.setItem(row, column, QTableWidgetItem(value))
 
     def _add_row(self) -> None:
         row = self.table.rowCount()
         self.table.insertRow(row)
-        defaults = ["По умолчанию", "Сталь", "1.5", "120", "15", "0", "0", "1", "да", ""]
+        default_material_name = default_material(self.settings_manager.as_dict()).name
+        defaults = [
+            "По умолчанию",
+            default_material_name,
+            "1.5",
+            "120",
+            "15",
+            "0",
+            "0",
+            "1",
+            "да",
+            "",
+        ]
         for column, value in enumerate(defaults):
-            self.table.setItem(row, column, QTableWidgetItem(value))
+            if column == 1:
+                self._set_material_combo(row, value)
+            else:
+                self.table.setItem(row, column, QTableWidgetItem(value))
 
     def _remove_selected(self) -> None:
         for row in sorted({index.row() for index in self.table.selectedIndexes()}, reverse=True):
@@ -125,8 +146,31 @@ class PricingDialog(QDialog):
         self.settings_manager.save()
         self.accept()
 
+    def _material_choices(self) -> list[str]:
+        settings = self.settings_manager.as_dict()
+        materials = materials_from_settings(settings)
+        choices = [material.name for material in materials if material.active]
+        default = default_material(settings).name
+        if default and default not in choices:
+            choices.insert(0, default)
+        return choices or ["Сталь"]
+
+    def _set_material_combo(self, row: int, value: str) -> None:
+        combo = QComboBox(self.table)
+        values = list(self.materials)
+        if value and value not in values:
+            values.insert(0, value)
+        combo.addItems(values)
+        if value:
+            combo.setCurrentText(value)
+        self.table.setCellWidget(row, 1, combo)
+        self.table.setItem(row, 1, QTableWidgetItem(combo.currentText()))
+
 
 def _cell(table: QTableWidget, row: int, column: int) -> str:
+    widget = table.cellWidget(row, column)
+    if isinstance(widget, QComboBox):
+        return widget.currentText().strip()
     item = table.item(row, column)
     return item.text().strip() if item is not None else ""
 

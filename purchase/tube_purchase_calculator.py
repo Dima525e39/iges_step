@@ -70,6 +70,7 @@ def calculate_tube_purchase(
             StockLengthInput(
                 detail_lengths_mm=lengths,
                 standard_stock_length_mm=stock_length,
+                chuck_remainder_mm=purchase_settings.chuck_remainder_mm,
                 stock_allowance_percent=purchase_settings.stock_allowance_percent,
                 end_trim_allowance_mm=purchase_settings.end_trim_allowance_mm,
                 include_part_gap=purchase_settings.include_part_gap,

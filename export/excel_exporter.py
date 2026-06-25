@@ -52,6 +52,7 @@ def calculation_detail_rows(jobs: list[FileJob], *, include_totals: bool) -> lis
     rows = [
         [
             "Файл",
+            "Материал",
             "Размер",
             "Толщина",
             "Длина",
@@ -86,6 +87,7 @@ def calculation_totals_row(jobs: list[FileJob]) -> list[str]:
         "",
         "",
         "",
+        "",
         f"{total_cut_length:.1f} мм",
         str(total_pierces),
         str(total_quantity),
@@ -116,7 +118,7 @@ def _sheet(rows: list[list[object]], *, total_row: int | None = None) -> str:
 
 
 def _columns_for_width(count: int) -> str:
-    widths = [32, 18, 14, 18, 18, 12, 12, 18]
+    widths = [32, 18, 18, 14, 18, 18, 12, 12, 18]
     cols = []
     for index in range(1, count + 1):
         width = widths[index - 1] if index <= len(widths) else 18
