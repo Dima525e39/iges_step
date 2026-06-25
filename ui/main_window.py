@@ -8,6 +8,7 @@ from PySide6.QtGui import QDragEnterEvent, QDragLeaveEvent, QDragMoveEvent, QDro
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
+    QDialog,
     QFileDialog,
     QFormLayout,
     QFrame,
@@ -58,10 +59,12 @@ from settings.tube_purchase_settings import TubePurchaseSettings
 from ui.commercial_offer_dialog import CommercialOfferDialog
 from ui.contractors_dialog import ContractorsDialog
 from ui.drop_helpers import local_paths_from_mime_data
+from ui.excel_preview_dialog import ExcelPreviewDialog
 from ui.file_drop_area import FileDropArea
 from ui.file_list_widget import FileListWidget
 from ui.geometry_debug_dialog import GeometryDebugDialog
 from ui.import_worker import CadImportWorker
+from ui.logo_dialog import LogoDialog
 from ui.materials_dialog import MaterialsDialog
 from ui.nesting_dialog import NestingDialog
 from ui.pricing_dialog import PricingDialog
@@ -339,10 +342,10 @@ class MainWindow(QMainWindow):
         actions.addWidget(self.process_selected_button)
         actions.addWidget(self.process_all_button)
         actions.addStretch(1)
-        actions.addWidget(self.nesting_button)
-        actions.addWidget(self.export_dxf_button)
-        actions.addWidget(self.export_svg_button)
-        actions.addWidget(self.export_csv_button)
+        self.nesting_button.setVisible(False)
+        self.export_dxf_button.setVisible(False)
+        self.export_svg_button.setVisible(False)
+        self.export_csv_button.setVisible(False)
         actions.addWidget(self.export_excel_button)
         actions.addWidget(self.export_pdf_button)
         actions.addWidget(self.save_project_button)
@@ -370,6 +373,7 @@ class MainWindow(QMainWindow):
         self.drop_area.pathsDropped.connect(self._add_paths)
         self.file_table.pathsDropped.connect(self._add_paths)
         self.file_table.quantityChanged.connect(self._on_job_quantity_changed)
+        self.file_table.thicknessChanged.connect(self._on_job_thickness_changed)
         self.diagnostic_table.quantityChanged.connect(self._on_job_quantity_changed)
         self.file_table.itemSelectionChanged.connect(self._sync_from_table_selection)
         self.diagnostic_table.itemSelectionChanged.connect(self._sync_from_diagnostic_selection)
@@ -580,53 +584,8 @@ class MainWindow(QMainWindow):
         self.shape_analyses[job.normalized_path] = geometry_analysis
 
         job.status = STATUS_IMPORTED
-        job.tube_type = getattr(geometry_analysis, "profile_hint", str(file_format))
-        job.tube_size = self._format_tube_size(geometry_analysis)
-        job.tube_length_mm = self._format_analysis_length(geometry_analysis)
-        job.wall_thickness_mm = self._format_wall_thickness(geometry_analysis)
-        job.wall_thickness_method = str(
-            getattr(geometry_analysis, "wall_thickness_method", PLACEHOLDER) or PLACEHOLDER
-        )
-        job.wall_thickness_confidence = str(
-            getattr(geometry_analysis, "wall_thickness_confidence", PLACEHOLDER)
-            or PLACEHOLDER
-        )
-        job.cut_length_mm = self._format_cut_length(geometry_analysis)
-        job.cut_end_length_mm = self._format_length_field(
-            geometry_analysis,
-            "cut_end_length_mm",
-        )
-        job.cut_feature_length_mm = self._format_length_field(
-            geometry_analysis,
-            "cut_feature_length_mm",
-        )
-        job.diagnostic_edge_length_mm = self._format_diagnostic_edge_length(
-            geometry_analysis
-        )
-        job.pierce_count = self._format_pierce_count(geometry_analysis)
-        job.ignored_longitudinal_edges = self._format_count(
-            geometry_analysis,
-            "ignored_longitudinal_edge_count",
-        )
-        job.ignored_plane_radius_edges = self._format_count(
-            geometry_analysis,
-            "ignored_plane_radius_edge_count",
-        )
-        job.auxiliary_unfold_edges = self._format_count(
-            geometry_analysis,
-            "auxiliary_unfold_edge_count",
-        )
-        job.debug_edges_path = str(getattr(geometry_analysis, "debug_edges_path", "") or "")
-        job.debug_faces_path = str(getattr(geometry_analysis, "debug_faces_path", "") or "")
-        self._update_job_price(job, geometry_analysis)
+        self._apply_analysis_to_job(job, geometry_analysis, fallback_profile=str(file_format))
         job.error_text = ""
-        job.warnings = [
-            self._format_analysis_summary(geometry_analysis),
-        ]
-        if job.price_warning:
-            job.warnings.append(job.price_warning)
-        analysis_warnings = getattr(geometry_analysis, "warnings", ())
-        job.warnings.extend(str(warning) for warning in analysis_warnings)
 
         self._refresh_jobs()
         current_job = self._current_job()
@@ -680,6 +639,96 @@ class MainWindow(QMainWindow):
         self.export_svg_button.setEnabled(enabled)
         self.nesting_button.setEnabled(enabled)
 
+    def _apply_analysis_to_job(
+        self,
+        job: FileJob,
+        analysis: GeometryAnalysisResult,
+        *,
+        fallback_profile: str = "CAD",
+    ) -> None:
+        job.tube_type = getattr(analysis, "profile_hint", fallback_profile)
+        job.tube_size = self._format_tube_size(analysis)
+        job.tube_length_mm = self._format_analysis_length(analysis)
+        job.wall_thickness_mm = self._format_wall_thickness(analysis)
+        job.wall_thickness_method = str(
+            getattr(analysis, "wall_thickness_method", PLACEHOLDER) or PLACEHOLDER
+        )
+        job.wall_thickness_confidence = str(
+            getattr(analysis, "wall_thickness_confidence", PLACEHOLDER) or PLACEHOLDER
+        )
+        job.cut_length_mm = self._format_cut_length(analysis)
+        job.cut_end_length_mm = self._format_length_field(analysis, "cut_end_length_mm")
+        job.cut_feature_length_mm = self._format_length_field(analysis, "cut_feature_length_mm")
+        job.diagnostic_edge_length_mm = self._format_diagnostic_edge_length(analysis)
+        job.pierce_count = self._format_pierce_count(analysis)
+        job.ignored_longitudinal_edges = self._format_count(
+            analysis,
+            "ignored_longitudinal_edge_count",
+        )
+        job.ignored_plane_radius_edges = self._format_count(
+            analysis,
+            "ignored_plane_radius_edge_count",
+        )
+        job.auxiliary_unfold_edges = self._format_count(
+            analysis,
+            "auxiliary_unfold_edge_count",
+        )
+        job.debug_edges_path = str(getattr(analysis, "debug_edges_path", "") or "")
+        job.debug_faces_path = str(getattr(analysis, "debug_faces_path", "") or "")
+        self._update_job_price(job, analysis)
+        job.warnings = [self._format_analysis_summary(analysis)]
+        if job.price_warning:
+            job.warnings.append(job.price_warning)
+        job.warnings.extend(str(warning) for warning in getattr(analysis, "warnings", ()))
+
+    def _on_job_thickness_changed(self, path: str, thickness: float) -> None:
+        job = self.queue.get(path)
+        if job is None or thickness <= 0.0:
+            return
+
+        summary = self.shape_summaries.get(job.normalized_path)
+        current_analysis = self.shape_analyses.get(job.normalized_path)
+        shape = self.imported_shapes.get(job.normalized_path)
+        try:
+            if shape is not None:
+                analysis = analyze_shape(
+                    shape,
+                    summary=summary,
+                    file_format=(
+                        current_analysis.file_format
+                        if current_analysis is not None
+                        else "CAD"
+                    ),
+                    manual_wall_thickness_mm=thickness,
+                    source_path=job.normalized_path,
+                )
+            elif current_analysis is not None and current_analysis.sheet_analysis is not None:
+                sheet_analysis = current_analysis.sheet_analysis
+                sheet_analysis.thickness_mm = thickness
+                analysis = analyze_shape(
+                    None,
+                    summary=summary,
+                    file_format="DXF",
+                    manual_wall_thickness_mm=thickness,
+                    source_path=job.normalized_path,
+                    sheet_analysis=sheet_analysis,
+                )
+            else:
+                return
+        except Exception as exc:
+            QMessageBox.warning(
+                self,
+                "Толщина",
+                f"Не удалось пересчитать файл с ручной толщиной:\n{exc}",
+            )
+            return
+
+        self.shape_analyses[job.normalized_path] = analysis
+        self._apply_analysis_to_job(job, analysis, fallback_profile=job.tube_type)
+        job.status = STATUS_IMPORTED
+        job.error_text = ""
+        self._refresh_jobs()
+
     def _format_model_length(self, summary: object) -> str:
         sizes = [
             getattr(summary, "size_x_mm", 0.0),
@@ -697,7 +746,6 @@ class MainWindow(QMainWindow):
     def _format_tube_size(self, analysis: object) -> str:
         width = float(getattr(analysis, "width_mm", 0.0) or 0.0)
         height = float(getattr(analysis, "height_mm", 0.0) or 0.0)
-        thickness = float(getattr(analysis, "wall_thickness_mm", 0.0) or 0.0)
         round_diameter = float(getattr(analysis, "round_outer_diameter_mm", 0.0) or 0.0)
         profile = str(getattr(analysis, "profile_hint", "") or "").lower()
         if width <= 0.0 or height <= 0.0:
@@ -708,8 +756,6 @@ class MainWindow(QMainWindow):
             base = f"Ø{max(width, height):.1f}"
         else:
             base = f"{width:.1f}×{height:.1f}"
-        if thickness > 0.0:
-            return f"{base}×{thickness:.1f}"
         return base
 
     def _update_job_price(self, job: FileJob, analysis: object) -> None:
@@ -1094,17 +1140,7 @@ class MainWindow(QMainWindow):
         CommercialOfferDialog(self.settings_manager, self).exec()
 
     def _choose_logo(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(
-            self,
-            "Выбрать логотип",
-            "",
-            "Изображения (*.png *.jpg *.jpeg)",
-        )
-        if not path:
-            return
-        self.settings_manager.set("logo", value={"path": path})
-        self.settings_manager.save()
-        self.statusBar().showMessage(f"Логотип выбран: {Path(path).name}", 5000)
+        LogoDialog(self.settings_manager, self).exec()
 
     def _settings_changed(self) -> None:
         self._apply_current_theme()
@@ -1137,6 +1173,9 @@ class MainWindow(QMainWindow):
     def _export_excel(self) -> None:
         if not self._ensure_has_jobs():
             return
+        jobs = self.queue.jobs()
+        if ExcelPreviewDialog(jobs, self).exec() != QDialog.DialogCode.Accepted:
+            return
         target_path, _ = QFileDialog.getSaveFileName(
             self,
             "Экспорт Excel",
@@ -1147,7 +1186,7 @@ class MainWindow(QMainWindow):
             return
         self._refresh_purchase()
         export_excel_workbook(
-            self.queue.jobs(),
+            jobs,
             self.purchase_rows,
             self.settings_manager.as_dict(),
             target_path,

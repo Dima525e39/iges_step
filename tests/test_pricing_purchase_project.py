@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 
 from core.file_job import FileJob, STATUS_IMPORTED
+from export.excel_exporter import export_excel_workbook
 from export.json_project import load_project, save_project
 from pricing.price_selector import calculate_job_price
 from purchase.tube_purchase_calculator import calculate_tube_purchase
@@ -111,6 +113,51 @@ class PricingPurchaseProjectTests(unittest.TestCase):
 
         self.assertEqual(rows[0].detail_count, 3)
         self.assertEqual(rows[0].detail_length_mm, 3000.0)
+
+    def test_file_job_table_row_keeps_thickness_separate(self) -> None:
+        job = FileJob(Path("tube.step"), status=STATUS_IMPORTED)
+        job.tube_size = "Ø35.0"
+        job.wall_thickness_mm = "2.5 мм"
+        job.tube_length_mm = "1000.0 мм"
+        job.cut_length_mm = "407.2 мм"
+        job.pierce_count = "3"
+        job.quantity = 2
+        job.price = "1200.00"
+
+        self.assertEqual(
+            job.to_table_row(),
+            [
+                "tube.step",
+                "Ø35.0",
+                "2.5 мм",
+                "1000.0 мм",
+                "407.2 мм",
+                "3",
+                "2",
+                "1200.00 руб.",
+            ],
+        )
+
+    def test_excel_export_contains_isometry_images(self) -> None:
+        job = FileJob(Path("tube.step"), status=STATUS_IMPORTED)
+        job.tube_size = "Ø35.0"
+        job.wall_thickness_mm = "2.5 мм"
+        job.tube_length_mm = "1000.0 мм"
+        job.cut_length_mm = "407.2 мм"
+        job.pierce_count = "3"
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "calculation.xlsx"
+            export_excel_workbook([job], [], {}, path)
+            with zipfile.ZipFile(path) as archive:
+                names = set(archive.namelist())
+                sheet = archive.read("xl/worksheets/sheet1.xml").decode("utf-8")
+
+        self.assertIn("xl/media/isometry1.png", names)
+        self.assertIn("xl/drawings/drawing1.xml", names)
+        self.assertIn("xl/worksheets/_rels/sheet1.xml.rels", names)
+        self.assertIn("<t>Толщина</t>", sheet)
+        self.assertIn('<drawing r:id="rId1"/>', sheet)
 
     def test_project_saves_jobs_and_settings(self) -> None:
         job = FileJob(Path("part.step"), status=STATUS_IMPORTED)

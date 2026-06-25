@@ -78,16 +78,12 @@ class FileJob:
         return [
             self.name,
             self.tube_size,
+            self.wall_thickness_mm,
             self.tube_length_mm,
             self.cut_length_mm,
             self.pierce_count,
             str(self.quantity),
             self.formatted_price,
-            self.material,
-            self.contractor,
-            self.status,
-            self.error_text,
-            "; ".join(self.warnings),
         ]
 
     def to_diagnostic_row(self) -> list[str]:

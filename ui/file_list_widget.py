@@ -12,20 +12,17 @@ from ui.drop_helpers import local_paths_from_mime_data
 class FileListWidget(QTableWidget):
     pathsDropped = Signal(list)
     quantityChanged = Signal(str, int)
+    thicknessChanged = Signal(str, float)
 
     HEADERS = [
         "Файл",
-        "Размер / толщина",
+        "Размер",
+        "Толщина",
         "Длина",
         "Длина реза",
         "Врезки",
         "Количество",
         "Цена",
-        "Материал",
-        "Контрагент",
-        "Статус",
-        "Ошибка",
-        "Предупреждения",
     ]
 
     DIAGNOSTIC_HEADERS = [
@@ -84,7 +81,7 @@ class FileListWidget(QTableWidget):
             for column, value in enumerate(values):
                 item = QTableWidgetItem(value)
                 item.setData(Qt.ItemDataRole.UserRole, job.normalized_path)
-                if self._is_quantity_column(column):
+                if self._is_quantity_column(column) or self._is_thickness_column(column):
                     item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
                 else:
                     item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
@@ -155,20 +152,53 @@ class FileListWidget(QTableWidget):
         headers = self.DIAGNOSTIC_HEADERS if self.diagnostic else self.HEADERS
         return 0 <= column < len(headers) and headers[column] == "Количество"
 
+    def _is_thickness_column(self, column: int) -> bool:
+        if self.diagnostic:
+            return False
+        headers = self.HEADERS
+        return 0 <= column < len(headers) and headers[column] == "Толщина"
+
     def _on_item_changed(self, item: QTableWidgetItem) -> None:
-        if not self._is_quantity_column(item.column()):
-            return
         path = str(item.data(Qt.ItemDataRole.UserRole) or "")
-        try:
-            quantity = max(1, int(item.text().strip()))
-        except ValueError:
-            quantity = 1
-        if item.text() != str(quantity):
-            self.blockSignals(True)
-            item.setText(str(quantity))
-            self.blockSignals(False)
-        if path:
-            self.quantityChanged.emit(path, quantity)
+        if self._is_quantity_column(item.column()):
+            try:
+                quantity = max(1, int(item.text().strip()))
+            except ValueError:
+                quantity = 1
+            if item.text() != str(quantity):
+                self.blockSignals(True)
+                item.setText(str(quantity))
+                self.blockSignals(False)
+            if path:
+                self.quantityChanged.emit(path, quantity)
+            return
+
+        if self._is_thickness_column(item.column()):
+            thickness = _number_from_text(item.text())
+            if thickness <= 0.0:
+                text = "—"
+            else:
+                text = f"{thickness:.1f} мм"
+            if item.text() != text:
+                self.blockSignals(True)
+                item.setText(text)
+                self.blockSignals(False)
+            if path and thickness > 0.0:
+                self.thicknessChanged.emit(path, thickness)
+
+
+def _number_from_text(text: str) -> float:
+    cleaned = (
+        text.strip()
+        .lower()
+        .replace("мм", "")
+        .replace(",", ".")
+        .replace(" ", "")
+    )
+    try:
+        return max(0.0, float(cleaned))
+    except ValueError:
+        return 0.0
 
 
 def _row_color(job: FileJob) -> QColor | None:
