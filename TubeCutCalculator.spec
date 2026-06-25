@@ -39,9 +39,13 @@ hiddenimports = [
     "OCC.Core.TopoDS",
     "OCC.Display.backend",
     "OCC.Display.qtDisplay",
+    "openpyxl",
+    "openpyxl.drawing.image",
+    "PIL",
+    "PIL.Image",
 ]
 
-for package_name in ("OCC",):
+for package_name in ("OCC", "openpyxl", "PIL"):
     package_datas, package_binaries, package_hiddenimports = collect_all(package_name)
     datas += package_datas
     binaries += package_binaries

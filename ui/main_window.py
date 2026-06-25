@@ -31,7 +31,7 @@ from PySide6.QtWidgets import (
 
 from app_info import APP_NAME, APP_VERSION
 from cad.analyzer import GeometryAnalysisResult, analyze_shape
-from cad.isometry_renderer import render_shape_isometry_png
+from cad.isometry_renderer import render_shape_isometry_png, write_shape_isometry_png
 from cad.shape_summary import ShapeSummary
 from core.file_job import (
     PLACEHOLDER,
@@ -532,6 +532,7 @@ class MainWindow(QMainWindow):
             job.auxiliary_unfold_edges = PLACEHOLDER
             job.debug_edges_path = ""
             job.debug_faces_path = ""
+            job.isometry_image_path = ""
             job.price = PLACEHOLDER
             job.price_warning = ""
             job.error_text = ""
@@ -586,6 +587,7 @@ class MainWindow(QMainWindow):
 
         job.status = STATUS_IMPORTED
         self._apply_analysis_to_job(job, geometry_analysis, fallback_profile=str(file_format))
+        self._cache_job_isometry(job, shape)
         job.error_text = ""
 
         self._refresh_jobs()
@@ -616,6 +618,7 @@ class MainWindow(QMainWindow):
         self.imported_shapes.pop(job.normalized_path, None)
         self.shape_summaries.pop(job.normalized_path, None)
         self.shape_analyses.pop(job.normalized_path, None)
+        job.isometry_image_path = ""
         self._refresh_jobs()
 
     def _finish_import_thread(self) -> None:
@@ -1199,14 +1202,38 @@ class MainWindow(QMainWindow):
     def _excel_isometry_images(self, jobs: list[FileJob]) -> dict[str, bytes]:
         images: dict[str, bytes] = {}
         for job in jobs:
+            if job.isometry_image_path and Path(job.isometry_image_path).exists():
+                continue
             shape = self.imported_shapes.get(job.normalized_path)
             if shape is None:
                 continue
             try:
+                cached_path = self._cache_job_isometry(job, shape)
+                if cached_path:
+                    continue
                 images[job.normalized_path] = render_shape_isometry_png(shape)
             except Exception:
                 continue
         return images
+
+    def _cache_job_isometry(self, job: FileJob, shape: object | None) -> str:
+        if shape is None:
+            job.isometry_image_path = ""
+            return ""
+        try:
+            path = write_shape_isometry_png(
+                shape,
+                job.normalized_path,
+                self._isometry_cache_dir(),
+            )
+        except Exception:
+            job.isometry_image_path = ""
+            return ""
+        job.isometry_image_path = str(path)
+        return job.isometry_image_path
+
+    def _isometry_cache_dir(self) -> Path:
+        return self.settings_manager.path.parent / "isometry"
 
     def _export_commercial_pdf(self) -> None:
         if not self._ensure_has_jobs():

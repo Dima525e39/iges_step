@@ -1,13 +1,39 @@
 from __future__ import annotations
 
 import binascii
+import hashlib
 import math
+import re
 import struct
 import zlib
+from pathlib import Path
 
 
 Point3D = tuple[float, float, float]
 Point2D = tuple[float, float]
+
+
+def write_shape_isometry_png(
+    shape: object,
+    source_path: str | Path,
+    cache_dir: str | Path,
+    *,
+    width: int = 220,
+    height: int = 140,
+) -> Path:
+    target_dir = Path(cache_dir)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    source = Path(source_path)
+    digest_source = str(source)
+    try:
+        digest_source += f":{source.stat().st_mtime_ns}"
+    except OSError:
+        pass
+    digest = hashlib.sha1(digest_source.encode("utf-8", errors="ignore")).hexdigest()[:12]
+    stem = _safe_filename_stem(source.stem) or "model"
+    target = target_dir / f"{stem}-{digest}.png"
+    target.write_bytes(render_shape_isometry_png(shape, width=width, height=height))
+    return target
 
 
 def render_shape_isometry_png(shape: object, *, width: int = 220, height: int = 140) -> bytes:
@@ -44,6 +70,11 @@ def render_shape_isometry_png(shape: object, *, width: int = 220, height: int = 
         for first, second in zip(canvas_points, canvas_points[1:], strict=False):
             _draw_line(pixels, width, height, first, second, (31, 41, 55), thickness=2)
     return _png(width, height, bytes(pixels))
+
+
+def _safe_filename_stem(stem: str) -> str:
+    safe = re.sub(r"[^A-Za-zА-Яа-я0-9_.-]+", "_", stem.strip())
+    return safe.strip("._-")[:80]
 
 
 def _shape_edge_polylines(shape: object) -> list[list[Point3D]]:

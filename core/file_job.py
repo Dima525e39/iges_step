@@ -57,6 +57,7 @@ class FileJob:
     auxiliary_unfold_edges: str = PLACEHOLDER
     debug_edges_path: str = ""
     debug_faces_path: str = ""
+    isometry_image_path: str = ""
     material: str = "Сталь"
     contractor: str = "По умолчанию"
     quantity: int = 1
@@ -138,6 +139,7 @@ class FileJob:
             "auxiliary_unfold_edges": self.auxiliary_unfold_edges,
             "debug_edges_path": self.debug_edges_path,
             "debug_faces_path": self.debug_faces_path,
+            "isometry_image_path": self.isometry_image_path,
             "material": self.material,
             "contractor": self.contractor,
             "quantity": self.quantity,
@@ -177,6 +179,7 @@ class FileJob:
             auxiliary_unfold_edges=str(data.get("auxiliary_unfold_edges", PLACEHOLDER)),
             debug_edges_path=str(data.get("debug_edges_path", "")),
             debug_faces_path=str(data.get("debug_faces_path", "")),
+            isometry_image_path=str(data.get("isometry_image_path", "")),
             material=str(data.get("material", "Сталь")),
             contractor=str(data.get("contractor", "По умолчанию")),
             quantity=max(1, int(data.get("quantity", 1) or 1)),
