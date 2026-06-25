@@ -31,7 +31,6 @@ from PySide6.QtWidgets import (
 
 from app_info import APP_NAME, APP_VERSION
 from cad.analyzer import GeometryAnalysisResult, analyze_shape
-from cad.isometry_renderer import render_shape_isometry_png, write_shape_isometry_png
 from cad.shape_summary import ShapeSummary
 from core.file_job import (
     PLACEHOLDER,
@@ -532,7 +531,6 @@ class MainWindow(QMainWindow):
             job.auxiliary_unfold_edges = PLACEHOLDER
             job.debug_edges_path = ""
             job.debug_faces_path = ""
-            job.isometry_image_path = ""
             job.price = PLACEHOLDER
             job.price_warning = ""
             job.error_text = ""
@@ -587,7 +585,6 @@ class MainWindow(QMainWindow):
 
         job.status = STATUS_IMPORTED
         self._apply_analysis_to_job(job, geometry_analysis, fallback_profile=str(file_format))
-        self._cache_job_isometry(job, shape)
         job.error_text = ""
 
         self._refresh_jobs()
@@ -618,7 +615,6 @@ class MainWindow(QMainWindow):
         self.imported_shapes.pop(job.normalized_path, None)
         self.shape_summaries.pop(job.normalized_path, None)
         self.shape_analyses.pop(job.normalized_path, None)
-        job.isometry_image_path = ""
         self._refresh_jobs()
 
     def _finish_import_thread(self) -> None:
@@ -896,11 +892,21 @@ class MainWindow(QMainWindow):
         imported = sum(1 for job in jobs if job.status == STATUS_IMPORTED)
         failed = sum(1 for job in jobs if job.status == STATUS_ERROR)
         quantity_total = sum(max(1, int(getattr(job, "quantity", 1) or 1)) for job in jobs)
+        cut_total = sum(
+            number_from_text(job.cut_length_mm) * max(1, int(getattr(job, "quantity", 1) or 1))
+            for job in jobs
+        )
+        pierce_total = sum(
+            int(round(number_from_text(job.pierce_count)))
+            * max(1, int(getattr(job, "quantity", 1) or 1))
+            for job in jobs
+        )
         total = sum(number_from_text(job.price) for job in jobs)
         currency = next((job.currency for job in jobs if job.currency), "руб.")
         self.summary_label.setText(
             f"Файлов: {len(jobs)} | Успешно: {imported} | Ошибок: {failed} | "
-            f"Деталей: {quantity_total} | Итого: {total:.2f} {currency}"
+            f"Деталей: {quantity_total} | Рез: {cut_total:.1f} мм | "
+            f"Врезки: {pierce_total} | Сумма: {total:.2f} {currency}"
         )
 
     def _on_job_quantity_changed(self, path: str, quantity: int) -> None:
@@ -1189,51 +1195,13 @@ class MainWindow(QMainWindow):
         if not target_path:
             return
         self._refresh_purchase()
-        isometry_images = self._excel_isometry_images(jobs)
         export_excel_workbook(
             jobs,
             self.purchase_rows,
             self.settings_manager.as_dict(),
             target_path,
-            isometry_images=isometry_images,
         )
         self.statusBar().showMessage(f"Excel сохранен: {Path(target_path).name}", 5000)
-
-    def _excel_isometry_images(self, jobs: list[FileJob]) -> dict[str, bytes]:
-        images: dict[str, bytes] = {}
-        for job in jobs:
-            if job.isometry_image_path and Path(job.isometry_image_path).exists():
-                continue
-            shape = self.imported_shapes.get(job.normalized_path)
-            if shape is None:
-                continue
-            try:
-                cached_path = self._cache_job_isometry(job, shape)
-                if cached_path:
-                    continue
-                images[job.normalized_path] = render_shape_isometry_png(shape)
-            except Exception:
-                continue
-        return images
-
-    def _cache_job_isometry(self, job: FileJob, shape: object | None) -> str:
-        if shape is None:
-            job.isometry_image_path = ""
-            return ""
-        try:
-            path = write_shape_isometry_png(
-                shape,
-                job.normalized_path,
-                self._isometry_cache_dir(),
-            )
-        except Exception:
-            job.isometry_image_path = ""
-            return ""
-        job.isometry_image_path = str(path)
-        return job.isometry_image_path
-
-    def _isometry_cache_dir(self) -> Path:
-        return self.settings_manager.path.parent / "isometry"
 
     def _export_commercial_pdf(self) -> None:
         if not self._ensure_has_jobs():

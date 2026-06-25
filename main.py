@@ -102,12 +102,6 @@ def _run_import_self_test(output_path: Path | None) -> int:
         )
         record("pythonocc-core import modules: OK")
 
-        import openpyxl
-        from PIL import Image
-
-        _ = (openpyxl, Image)
-        record("Excel image dependencies: OK")
-
         from cad.analyzer import analyze_shape
         from cad.dxf_reader import read_dxf_sheet
         from cad.profile_detector import detect_profile_from_dimensions

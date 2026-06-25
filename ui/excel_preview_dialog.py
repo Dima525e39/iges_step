@@ -12,11 +12,11 @@ from PySide6.QtWidgets import (
 )
 
 from core.file_job import FileJob
+from export.excel_exporter import calculation_detail_rows
 
 
 class ExcelPreviewDialog(QDialog):
     HEADERS = [
-        "Изометрия",
         "Файл",
         "Размер",
         "Толщина",
@@ -36,13 +36,13 @@ class ExcelPreviewDialog(QDialog):
         self.table = QTableWidget()
         self.table.setColumnCount(len(self.HEADERS))
         self.table.setHorizontalHeaderLabels(self.HEADERS)
-        self.table.setRowCount(len(jobs))
+        rows = calculation_detail_rows(jobs, include_totals=True)[1:]
+        self.table.setRowCount(len(rows))
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.verticalHeader().setVisible(False)
 
-        for row, job in enumerate(jobs):
-            values = ["эскиз", *job.to_table_row()]
+        for row, values in enumerate(rows):
             for column, value in enumerate(values):
                 self.table.setItem(row, column, QTableWidgetItem(str(value)))
         self.table.resizeColumnsToContents()

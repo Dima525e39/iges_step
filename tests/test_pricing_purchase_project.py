@@ -138,13 +138,15 @@ class PricingPurchaseProjectTests(unittest.TestCase):
             ],
         )
 
-    def test_excel_export_contains_isometry_images(self) -> None:
+    def test_excel_export_adds_totals_row_without_isometry(self) -> None:
         job = FileJob(Path("tube.step"), status=STATUS_IMPORTED)
         job.tube_size = "Ø35.0"
         job.wall_thickness_mm = "2.5 мм"
         job.tube_length_mm = "1000.0 мм"
         job.cut_length_mm = "407.2 мм"
         job.pierce_count = "3"
+        job.quantity = 2
+        job.price = "1200.00"
 
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "calculation.xlsx"
@@ -153,41 +155,11 @@ class PricingPurchaseProjectTests(unittest.TestCase):
                 names = set(archive.namelist())
                 sheet = archive.read("xl/worksheets/sheet1.xml").decode("utf-8")
 
-        self.assertTrue(any(name.startswith("xl/media/") for name in names))
-        self.assertIn("xl/drawings/drawing1.xml", names)
-        self.assertIn("xl/worksheets/_rels/sheet1.xml.rels", names)
-        self.assertIn("Толщина", sheet)
-        self.assertIn("drawing", sheet)
-
-    def test_excel_export_uses_supplied_real_isometry_image(self) -> None:
-        job = FileJob(Path("real.step"), status=STATUS_IMPORTED)
-        real_image = _tiny_png()
-
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "calculation.xlsx"
-            export_excel_workbook(
-                [job],
-                [],
-                {},
-                path,
-                isometry_images={job.normalized_path: real_image},
-            )
-            with zipfile.ZipFile(path) as archive:
-                media_names = [name for name in archive.namelist() if name.startswith("xl/media/")]
-                image = archive.read(media_names[0])
-
-        self.assertGreater(len(image), 0)
-
-    def test_project_saves_job_isometry_path(self) -> None:
-        job = FileJob(Path("part.step"), status=STATUS_IMPORTED)
-        job.isometry_image_path = "cache/part.png"
-
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "project.json"
-            save_project([job], path, settings={})
-            jobs, _loaded_settings = load_project(path)
-
-        self.assertEqual(jobs[0].isometry_image_path, "cache/part.png")
+        self.assertFalse(any(name.startswith("xl/media/") for name in names))
+        self.assertNotIn("Изометрия", sheet)
+        self.assertIn("Итого", sheet)
+        self.assertIn("814.4 мм", sheet)
+        self.assertIn("1200.00 руб.", sheet)
 
     def test_project_saves_jobs_and_settings(self) -> None:
         job = FileJob(Path("part.step"), status=STATUS_IMPORTED)
@@ -202,15 +174,6 @@ class PricingPurchaseProjectTests(unittest.TestCase):
         self.assertEqual(len(jobs), 1)
         self.assertEqual(jobs[0].tube_size, "25.0×25.0×1.5")
         self.assertEqual(loaded_settings["ui"]["theme"], "dark")
-
-
-def _tiny_png() -> bytes:
-    return (
-        b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
-        b"\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\x0cIDATx\x9cc\xf8\xff\xff?"
-        b"\x00\x05\xfe\x02\xfeA\xe2!\xbc\x00\x00\x00\x00IEND\xaeB`\x82"
-    )
-
 
 if __name__ == "__main__":
     unittest.main()

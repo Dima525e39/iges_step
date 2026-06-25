@@ -3,8 +3,6 @@ channels:
   - conda-forge
 dependencies:
   - python=3.13
-  - openpyxl>=3.1
-  - pillow>=10
   - pyside6>=6.9
   - pythonocc-core=7.9.3
   - pyinstaller>=6.14
