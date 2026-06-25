@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from pathlib import Path
+
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QDialog,
@@ -9,6 +11,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QMessageBox,
     QPushButton,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -21,18 +24,30 @@ class LogoDialog(QDialog):
     def __init__(self, settings_manager: SettingsManager, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.settings_manager = settings_manager
+        self._source_pixmap = QPixmap()
         self.setWindowTitle("Логотип")
-        self.resize(520, 360)
+        self.resize(520, 340)
+        self.setMinimumSize(420, 300)
+        self.setMaximumSize(720, 520)
 
         layout = QVBoxLayout(self)
         self.preview = QLabel()
         self.preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.preview.setMinimumHeight(220)
+        self.preview.setMinimumSize(360, 200)
+        self.preview.setMaximumHeight(280)
+        self.preview.setSizePolicy(
+            QSizePolicy.Policy.Ignored,
+            QSizePolicy.Policy.Expanding,
+        )
         self.preview.setStyleSheet("border: 1px solid #cbd5e1; background: #ffffff;")
         layout.addWidget(self.preview, stretch=1)
 
         self.path_label = QLabel()
-        self.path_label.setWordWrap(True)
+        self.path_label.setWordWrap(False)
+        self.path_label.setSizePolicy(
+            QSizePolicy.Policy.Ignored,
+            QSizePolicy.Policy.Preferred,
+        )
         layout.addWidget(self.path_label)
 
         actions = QHBoxLayout()
@@ -56,31 +71,45 @@ class LogoDialog(QDialog):
         path = logo_path_from_settings(self.settings_manager.as_dict())
         self.delete_button.setEnabled(bool(path))
         if not path:
+            self._source_pixmap = QPixmap()
             self.preview.setText("Логотип не установлен")
             self.preview.setPixmap(QPixmap())
             self.path_label.setText("—")
+            self.path_label.setToolTip("")
             return
 
         pixmap = QPixmap(path)
         if pixmap.isNull():
+            self._source_pixmap = QPixmap()
             self.preview.setText("Не удалось открыть логотип")
             self.preview.setPixmap(QPixmap())
-            self.path_label.setText(path)
+            self.path_label.setText(f"Файл: {Path(path).name}")
+            self.path_label.setToolTip(path)
             return
 
         self.preview.setText("")
+        self._source_pixmap = pixmap
+        self._update_scaled_preview()
+        self.path_label.setText(f"Файл: {Path(path).name}")
+        self.path_label.setToolTip(path)
+
+    def resizeEvent(self, event: object) -> None:
+        super().resizeEvent(event)
+        QTimer.singleShot(0, self._update_scaled_preview)
+
+    def _update_scaled_preview(self) -> None:
+        if self._source_pixmap.isNull():
+            return
+        target_size = self.preview.contentsRect().size()
+        if target_size.width() <= 0 or target_size.height() <= 0:
+            return
         self.preview.setPixmap(
-            pixmap.scaled(
-                self.preview.size(),
+            self._source_pixmap.scaled(
+                target_size,
                 Qt.AspectRatioMode.KeepAspectRatio,
                 Qt.TransformationMode.SmoothTransformation,
             )
         )
-        self.path_label.setText(path)
-
-    def resizeEvent(self, event: object) -> None:
-        super().resizeEvent(event)
-        self._refresh_preview()
 
     def _load_logo(self) -> None:
         path, _ = QFileDialog.getOpenFileName(

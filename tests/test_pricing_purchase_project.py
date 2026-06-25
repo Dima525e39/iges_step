@@ -159,6 +159,24 @@ class PricingPurchaseProjectTests(unittest.TestCase):
         self.assertIn("<t>Толщина</t>", sheet)
         self.assertIn('<drawing r:id="rId1"/>', sheet)
 
+    def test_excel_export_uses_supplied_real_isometry_image(self) -> None:
+        job = FileJob(Path("real.step"), status=STATUS_IMPORTED)
+        real_image = b"real-png-bytes"
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "calculation.xlsx"
+            export_excel_workbook(
+                [job],
+                [],
+                {},
+                path,
+                isometry_images={job.normalized_path: real_image},
+            )
+            with zipfile.ZipFile(path) as archive:
+                image = archive.read("xl/media/isometry1.png")
+
+        self.assertEqual(image, real_image)
+
     def test_project_saves_jobs_and_settings(self) -> None:
         job = FileJob(Path("part.step"), status=STATUS_IMPORTED)
         job.tube_size = "25.0×25.0×1.5"

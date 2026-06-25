@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
 
 from app_info import APP_NAME, APP_VERSION
 from cad.analyzer import GeometryAnalysisResult, analyze_shape
+from cad.isometry_renderer import render_shape_isometry_png
 from cad.shape_summary import ShapeSummary
 from core.file_job import (
     PLACEHOLDER,
@@ -1185,13 +1186,27 @@ class MainWindow(QMainWindow):
         if not target_path:
             return
         self._refresh_purchase()
+        isometry_images = self._excel_isometry_images(jobs)
         export_excel_workbook(
             jobs,
             self.purchase_rows,
             self.settings_manager.as_dict(),
             target_path,
+            isometry_images=isometry_images,
         )
         self.statusBar().showMessage(f"Excel сохранен: {Path(target_path).name}", 5000)
+
+    def _excel_isometry_images(self, jobs: list[FileJob]) -> dict[str, bytes]:
+        images: dict[str, bytes] = {}
+        for job in jobs:
+            shape = self.imported_shapes.get(job.normalized_path)
+            if shape is None:
+                continue
+            try:
+                images[job.normalized_path] = render_shape_isometry_png(shape)
+            except Exception:
+                continue
+        return images
 
     def _export_commercial_pdf(self) -> None:
         if not self._ensure_has_jobs():

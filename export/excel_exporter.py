@@ -18,6 +18,8 @@ def export_excel_workbook(
     purchase_rows: list[TubePurchaseRow],
     settings: dict[str, Any],
     target_path: str | Path,
+    *,
+    isometry_images: dict[str, bytes] | None = None,
 ) -> None:
     detail_rows = [
         [
@@ -65,7 +67,10 @@ def export_excel_workbook(
             archive.writestr("xl/drawings/drawing1.xml", _drawing(jobs))
             archive.writestr("xl/drawings/_rels/drawing1.xml.rels", _drawing_rels(len(jobs)))
             for index, job in enumerate(jobs, start=1):
-                archive.writestr(f"xl/media/isometry{index}.png", _isometry_png(job))
+                image = (isometry_images or {}).get(job.normalized_path)
+                if not image:
+                    image = _fallback_isometry_png(job)
+                archive.writestr(f"xl/media/isometry{index}.png", image)
         archive.writestr("xl/worksheets/sheet2.xml", _sheet(purchase_sheet))
         archive.writestr("xl/worksheets/sheet3.xml", _sheet(settings_sheet))
 
@@ -225,7 +230,7 @@ def _drawing_rels(count: int) -> str:
     )
 
 
-def _isometry_png(job: FileJob) -> bytes:
+def _fallback_isometry_png(job: FileJob) -> bytes:
     width, height = 160, 84
     pixels = bytearray([255, 255, 255] * width * height)
 
