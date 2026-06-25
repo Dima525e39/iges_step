@@ -8,6 +8,8 @@ def logo_path_from_settings(settings: dict[str, Any]) -> str:
     logo = settings.get("logo", {})
     if not isinstance(logo, dict):
         return ""
+    if logo.get("enabled") is False:
+        return ""
     path = str(logo.get("path", ""))
     if not path:
         return ""

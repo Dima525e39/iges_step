@@ -9,9 +9,14 @@ class Contractor:
     id: str
     name: str
     inn: str = ""
+    kpp: str = ""
     phone: str = ""
     email: str = ""
     address: str = ""
+    bank: str = ""
+    bik: str = ""
+    account: str = ""
+    corr_account: str = ""
     comment: str = ""
     markup_percent: float = 0.0
     currency: str = "руб."
@@ -23,9 +28,14 @@ class Contractor:
             id=str(data.get("id", "")) or _slug(str(data.get("name", "default"))),
             name=str(data.get("name", "По умолчанию")),
             inn=str(data.get("inn", "")),
+            kpp=str(data.get("kpp", "")),
             phone=str(data.get("phone", "")),
             email=str(data.get("email", "")),
             address=str(data.get("address", "")),
+            bank=str(data.get("bank", "")),
+            bik=str(data.get("bik", "")),
+            account=str(data.get("account", "")),
+            corr_account=str(data.get("corr_account", "")),
             comment=str(data.get("comment", "")),
             markup_percent=float(data.get("markup_percent", 0.0) or 0.0),
             currency=str(data.get("currency", "руб.")),
@@ -37,9 +47,14 @@ class Contractor:
             "id": self.id,
             "name": self.name,
             "inn": self.inn,
+            "kpp": self.kpp,
             "phone": self.phone,
             "email": self.email,
             "address": self.address,
+            "bank": self.bank,
+            "bik": self.bik,
+            "account": self.account,
+            "corr_account": self.corr_account,
             "comment": self.comment,
             "markup_percent": self.markup_percent,
             "currency": self.currency,

@@ -124,7 +124,9 @@ class FileQueueTests(unittest.TestCase):
             "part_x5.dxf": 5,
             "part 12шт.dxf": 12,
             "part qty-7.step": 7,
-            "part (3).igs": 3,
+            "part (3).igs": 1,
+            "part 3шт.igs": 3,
+            "МС-УСК-240-002.step": 1,
             "tube 40x20x2.dxf": 1,
             "profile_35x2.5.dxf": 1,
         }

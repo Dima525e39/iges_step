@@ -18,7 +18,6 @@ _QUANTITY_PATTERNS = (
     re.compile(r"(?:^|[\s_\-()[\]])(?:x|х|qty|q-ty|кол|kol|count)\s*[:=_-]?\s*(\d{1,4})(?=$|[\s_\-().\[\]])", re.IGNORECASE),
     re.compile(r"(?:^|[\s_\-()[\]])(\d{1,4})\s*(?:шт|штук|pcs|pc|pieces)(?=$|[\s_\-().\[\]])", re.IGNORECASE),
     re.compile(r"(?:^|[\s_\-()[\]])(\d{1,4})\s*(?:x|х)(?=$|[\s_\-().\[\]])", re.IGNORECASE),
-    re.compile(r"[\s_\-()[\[](\d{1,4})[\])\]]?$", re.IGNORECASE),
 )
 
 

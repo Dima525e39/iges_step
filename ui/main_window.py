@@ -64,6 +64,7 @@ from ui.file_drop_area import FileDropArea
 from ui.file_list_widget import FileListWidget
 from ui.geometry_debug_dialog import GeometryDebugDialog
 from ui.import_worker import CadImportWorker
+from ui.invoice_export_dialog import InvoiceExportDialog
 from ui.logo_dialog import LogoDialog
 from ui.materials_dialog import MaterialsDialog
 from ui.nesting_dialog import NestingDialog
@@ -333,7 +334,7 @@ class MainWindow(QMainWindow):
         self.process_all_button.setObjectName("PrimaryButton")
         self.export_csv_button = QPushButton("Экспорт CSV")
         self.export_excel_button = QPushButton("Экспорт Excel")
-        self.export_pdf_button = QPushButton("PDF КП")
+        self.export_pdf_button = QPushButton("PDF счет")
         self.export_dxf_button = QPushButton("DXF")
         self.export_svg_button = QPushButton("SVG")
         self.nesting_button = QPushButton("Nesting")
@@ -1206,10 +1207,14 @@ class MainWindow(QMainWindow):
     def _export_commercial_pdf(self) -> None:
         if not self._ensure_has_jobs():
             return
+        dialog = InvoiceExportDialog(self.settings_manager, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        dialog.apply_to_settings()
         target_path, _ = QFileDialog.getSaveFileName(
             self,
-            "PDF — коммерческое предложение",
-            "TubeCutCalculator-offer.pdf",
+            "PDF — счет на оплату",
+            "TubeCutCalculator-invoice.pdf",
             "PDF (*.pdf)",
         )
         if not target_path:
@@ -1221,7 +1226,7 @@ class MainWindow(QMainWindow):
             self.settings_manager.as_dict(),
             target_path,
         )
-        self.statusBar().showMessage(f"PDF КП сохранен: {Path(target_path).name}", 5000)
+        self.statusBar().showMessage(f"PDF счет сохранен: {Path(target_path).name}", 5000)
 
     def _export_technical_pdf(self) -> None:
         if not self._ensure_has_jobs():

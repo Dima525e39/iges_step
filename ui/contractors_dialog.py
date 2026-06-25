@@ -18,9 +18,14 @@ class ContractorsDialog(QDialog):
     HEADERS = [
         "Название",
         "ИНН",
+        "КПП",
         "Телефон",
         "Email",
         "Адрес",
+        "Банк",
+        "БИК",
+        "Р/с",
+        "К/с",
         "Комментарий",
         "Наценка, %",
         "Валюта",
@@ -66,9 +71,14 @@ class ContractorsDialog(QDialog):
             values = [
                 contractor.name,
                 contractor.inn,
+                contractor.kpp,
                 contractor.phone,
                 contractor.email,
                 contractor.address,
+                contractor.bank,
+                contractor.bik,
+                contractor.account,
+                contractor.corr_account,
                 contractor.comment,
                 f"{contractor.markup_percent:.2f}",
                 contractor.currency,
@@ -80,7 +90,7 @@ class ContractorsDialog(QDialog):
     def _add_row(self) -> None:
         row = self.table.rowCount()
         self.table.insertRow(row)
-        defaults = ["Новый контрагент", "", "", "", "", "", "0", "руб.", ""]
+        defaults = ["Новый контрагент", "", "", "", "", "", "", "", "", "", "", "0", "руб.", ""]
         for column, value in enumerate(defaults):
             self.table.setItem(row, column, QTableWidgetItem(value))
 
@@ -93,7 +103,7 @@ class ContractorsDialog(QDialog):
         default_seen = False
         for row in range(self.table.rowCount()):
             name = _cell(self.table, row, 0) or "Контрагент"
-            is_default = _is_yes(_cell(self.table, row, 8))
+            is_default = _is_yes(_cell(self.table, row, 13))
             if is_default and default_seen:
                 is_default = False
             default_seen = default_seen or is_default
@@ -101,12 +111,17 @@ class ContractorsDialog(QDialog):
                 id=_slug(name),
                 name=name,
                 inn=_cell(self.table, row, 1),
-                phone=_cell(self.table, row, 2),
-                email=_cell(self.table, row, 3),
-                address=_cell(self.table, row, 4),
-                comment=_cell(self.table, row, 5),
-                markup_percent=_float(_cell(self.table, row, 6)),
-                currency=_cell(self.table, row, 7) or "руб.",
+                kpp=_cell(self.table, row, 2),
+                phone=_cell(self.table, row, 3),
+                email=_cell(self.table, row, 4),
+                address=_cell(self.table, row, 5),
+                bank=_cell(self.table, row, 6),
+                bik=_cell(self.table, row, 7),
+                account=_cell(self.table, row, 8),
+                corr_account=_cell(self.table, row, 9),
+                comment=_cell(self.table, row, 10),
+                markup_percent=_float(_cell(self.table, row, 11)),
+                currency=_cell(self.table, row, 12) or "руб.",
                 is_default=is_default,
             )
             contractors.append(contractor.to_dict())

@@ -123,11 +123,13 @@ class LogoDialog(QDialog):
         if QPixmap(path).isNull():
             QMessageBox.warning(self, "Логотип", "Не удалось открыть выбранное изображение.")
             return
-        self.settings_manager.set("logo", value={"path": path})
+        self.settings_manager.set("logo", "path", value=path)
+        self.settings_manager.set("logo", "enabled", value=True)
         self.settings_manager.save()
         self._refresh_preview()
 
     def _delete_logo(self) -> None:
-        self.settings_manager.set("logo", value={"path": ""})
+        self.settings_manager.set("logo", "path", value="")
+        self.settings_manager.set("logo", "enabled", value=False)
         self.settings_manager.save()
         self._refresh_preview()

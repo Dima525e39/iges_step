@@ -8,6 +8,7 @@ from pathlib import Path
 from core.file_job import FileJob, STATUS_IMPORTED
 from export.excel_exporter import export_excel_workbook
 from export.json_project import load_project, save_project
+from export.report_html import commercial_offer_html
 from pricing.price_selector import calculate_job_price
 from purchase.tube_purchase_calculator import calculate_tube_purchase
 
@@ -160,6 +161,49 @@ class PricingPurchaseProjectTests(unittest.TestCase):
         self.assertIn("Итого", sheet)
         self.assertIn("814.4 мм", sheet)
         self.assertIn("1200.00 руб.", sheet)
+
+    def test_invoice_html_uses_requisites_and_hides_disabled_logo(self) -> None:
+        job = FileJob(Path("tube.step"), status=STATUS_IMPORTED)
+        job.cut_length_mm = "1000.0 мм"
+        job.pierce_count = "2"
+        job.quantity = 2
+        job.price = "500.00"
+        settings = {
+            "logo": {"path": "/tmp/logo.png", "enabled": False},
+            "contractors": [
+                {
+                    "id": "buyer",
+                    "name": "ООО Покупатель",
+                    "inn": "7700000000",
+                    "kpp": "770001001",
+                    "address": "Москва",
+                    "is_default": True,
+                }
+            ],
+            "commercial_offer": {
+                "document_title": "Счет на оплату",
+                "number": "42",
+                "date": "2026-06-25",
+                "supplier_name": "ИП Поставщик",
+                "supplier_inn": "660000000000",
+                "supplier_bank": "Банк",
+                "supplier_bik": "123456789",
+                "supplier_account": "40700000000000000000",
+                "supplier_corr_account": "30100000000000000000",
+                "basis": "Договор поставки",
+                "vat_mode": "included",
+                "vat_rate": 20.0,
+                "unit": "шт",
+            },
+        }
+
+        html = commercial_offer_html([job], [], settings)
+
+        self.assertIn("Счет на оплату № 42", html)
+        self.assertIn("ООО Покупатель", html)
+        self.assertIn("770001001", html)
+        self.assertIn("В том числе НДС (20%)", html)
+        self.assertNotIn("<img", html)
 
     def test_project_saves_jobs_and_settings(self) -> None:
         job = FileJob(Path("part.step"), status=STATUS_IMPORTED)
