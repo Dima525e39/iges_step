@@ -21,6 +21,7 @@ def install_top_menu(window: QMainWindow) -> None:
     settings_menu = menu_bar.addMenu("Настройки")
     _add_action(settings_menu, "Контрагенты", window._open_contractors_settings)
     _add_action(settings_menu, "Материалы", window._open_materials_settings)
+    _add_action(settings_menu, "Прайс труб", window._open_tube_price_settings)
     _add_action(settings_menu, "Цены", window._open_pricing_settings)
     _add_action(settings_menu, "Закупка трубы", window._open_purchase_settings)
     _add_action(settings_menu, "Логотип", window._choose_logo)

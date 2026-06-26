@@ -73,6 +73,7 @@
       "is_default": false
     }
   ],
+  "tube_prices": [],
   "pricing": {
     "price_per_meter": 120.0,
     "price_per_pierce": 15.0,

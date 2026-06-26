@@ -8,6 +8,7 @@ from purchase.stock_length_calculator import StockLengthInput, calculate_stock_l
 from purchase.tube_grouping import group_jobs_by_tube, number_from_text
 from settings.materials_manager import material_by_name
 from settings.tube_purchase_settings import TubePurchaseSettings
+from settings.tube_price_manager import select_tube_price_rule
 
 
 @dataclass(slots=True)
@@ -56,8 +57,16 @@ def calculate_tube_purchase(
     rows: list[TubePurchaseRow] = []
     for group in group_jobs_by_tube(jobs):
         material = material_by_name(settings, group.material)
+        tube_price = select_tube_price_rule(
+            settings,
+            material=group.material,
+            tube_size=group.tube_size,
+            wall_thickness_mm=group.wall_thickness_mm,
+        )
         stock_length = (
-            material.standard_stock_length_mm
+            tube_price.standard_stock_length_mm
+            if tube_price is not None and tube_price.standard_stock_length_mm > 0.0
+            else material.standard_stock_length_mm
             if material.standard_stock_length_mm > 0.0
             else purchase_settings.standard_stock_length_mm
         )
@@ -80,10 +89,20 @@ def calculate_tube_purchase(
         )
         cost = 0.0
         if purchase_settings.show_purchase_cost:
-            if material.tube_price_per_stock > 0.0:
-                cost = result.stock_count * material.tube_price_per_stock
-            elif material.tube_price_per_meter > 0.0:
-                cost = result.purchase_length_mm / 1000.0 * material.tube_price_per_meter
+            price_per_stock = (
+                tube_price.tube_price_per_stock
+                if tube_price is not None and tube_price.tube_price_per_stock > 0.0
+                else material.tube_price_per_stock
+            )
+            price_per_meter = (
+                tube_price.tube_price_per_meter
+                if tube_price is not None and tube_price.tube_price_per_meter > 0.0
+                else material.tube_price_per_meter
+            )
+            if price_per_stock > 0.0:
+                cost = result.stock_count * price_per_stock
+            elif price_per_meter > 0.0:
+                cost = result.purchase_length_mm / 1000.0 * price_per_meter
         rows.append(
             TubePurchaseRow(
                 material=group.material,

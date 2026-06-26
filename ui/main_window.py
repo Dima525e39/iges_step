@@ -76,6 +76,7 @@ from ui.stock_purchase_widget import StockPurchaseWidget
 from ui.theme_manager import apply_theme
 from ui.top_menu import install_top_menu
 from ui.tube_purchase_settings_dialog import TubePurchaseSettingsDialog
+from ui.tube_price_dialog import TubePriceDialog
 from ui.viewer_2d import Viewer2D
 from ui.viewer_3d import Viewer3D
 
@@ -730,6 +731,12 @@ class MainWindow(QMainWindow):
                     sheet_analysis=sheet_analysis,
                 )
             else:
+                job.wall_thickness_mm = f"{thickness:.1f} мм"
+                self._refresh_jobs()
+                self.statusBar().showMessage(
+                    f"Толщина обновлена для файла: {job.name}. Для пересчета стоимости нужна обработанная модель.",
+                    6000,
+                )
                 return
         except Exception as exc:
             QMessageBox.warning(
@@ -744,6 +751,10 @@ class MainWindow(QMainWindow):
         job.status = STATUS_IMPORTED
         job.error_text = ""
         self._refresh_jobs()
+        self.statusBar().showMessage(
+            f"Толщина и стоимость пересчитаны для файла: {job.name}",
+            4000,
+        )
 
     def _format_model_length(self, summary: object) -> str:
         sizes = [
@@ -794,6 +805,8 @@ class MainWindow(QMainWindow):
         material_result = calculate_tube_material_cost(
             self.settings_manager.as_dict(),
             material=job.material,
+            tube_size=job.tube_size,
+            wall_thickness_mm=thickness,
             tube_length_mm=number_from_text(job.tube_length_mm)
             or float(getattr(analysis, "length_mm", 0.0) or 0.0),
             quantity=quantity,
@@ -810,8 +823,13 @@ class MainWindow(QMainWindow):
         job = self.queue.get(path)
         if job is None or job.material == material:
             return
-        self._set_material_for_jobs([job], material)
+        job.material = material
+        self._recalculate_job_price(job)
         self._refresh_jobs()
+        self.statusBar().showMessage(
+            f"Стоимость пересчитана для файла: {job.name}",
+            4000,
+        )
 
     def _choose_material_for_bulk_processing(self, jobs: list[FileJob]) -> tuple[str, bool]:
         current_material = ""
@@ -845,16 +863,18 @@ class MainWindow(QMainWindow):
             job.material = material
             if customer_tube is not None:
                 job.customer_tube = customer_tube
-            analysis = self.shape_analyses.get(job.normalized_path)
-            if analysis is not None:
-                old_warning = job.price_warning
-                if old_warning:
-                    job.warnings = [
-                        warning for warning in job.warnings if warning != old_warning
-                    ]
-                self._update_job_price(job, analysis)
-                if job.price_warning and job.price_warning not in job.warnings:
-                    job.warnings.append(job.price_warning)
+            self._recalculate_job_price(job)
+
+    def _recalculate_job_price(self, job: FileJob) -> None:
+        analysis = self.shape_analyses.get(job.normalized_path)
+        if analysis is None:
+            return
+        old_warning = job.price_warning
+        if old_warning:
+            job.warnings = [warning for warning in job.warnings if warning != old_warning]
+        self._update_job_price(job, analysis)
+        if job.price_warning and job.price_warning not in job.warnings:
+            job.warnings.append(job.price_warning)
 
     def _format_analysis_summary(self, analysis: object) -> str:
         return (
@@ -1221,6 +1241,10 @@ class MainWindow(QMainWindow):
 
     def _open_materials_settings(self) -> None:
         if MaterialsDialog(self.settings_manager, self).exec():
+            self._settings_changed()
+
+    def _open_tube_price_settings(self) -> None:
+        if TubePriceDialog(self.settings_manager, self).exec():
             self._settings_changed()
 
     def _open_pricing_settings(self) -> None:
