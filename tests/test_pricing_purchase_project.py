@@ -57,6 +57,52 @@ class PricingPurchaseProjectTests(unittest.TestCase):
         self.assertEqual(result.selection.source, "точное правило")
         self.assertAlmostEqual(result.total, 219.45)
 
+    def test_price_selector_uses_selected_material_before_default_row(self) -> None:
+        settings = {
+            "contractors": [
+                {
+                    "id": "default",
+                    "name": "По умолчанию",
+                    "currency": "руб.",
+                    "is_default": True,
+                }
+            ],
+            "pricing": {
+                "thickness_tolerance_mm": 0.25,
+                "rules": [
+                    {
+                        "contractor": "По умолчанию",
+                        "material": "Сталь",
+                        "thickness_mm": 1.5,
+                        "price_per_meter": 100.0,
+                        "price_per_pierce": 10.0,
+                        "active": True,
+                        "is_default": True,
+                    },
+                    {
+                        "contractor": "По умолчанию",
+                        "material": "Нержавейка",
+                        "thickness_mm": 2.0,
+                        "price_per_meter": 500.0,
+                        "price_per_pierce": 50.0,
+                        "active": True,
+                    },
+                ],
+            },
+        }
+
+        result = calculate_job_price(
+            settings,
+            contractor="По умолчанию",
+            material="Нержавейка",
+            thickness_mm=3.0,
+            cut_length_mm=1000.0,
+            pierce_count=1,
+        )
+
+        self.assertEqual(result.selection.rule.material, "Нержавейка")
+        self.assertEqual(result.total, 550.0)
+
     def test_material_cost_is_zero_for_customer_tube(self) -> None:
         result = calculate_tube_material_cost(
             {
@@ -193,6 +239,8 @@ class PricingPurchaseProjectTests(unittest.TestCase):
 
         self.assertEqual(rows[0].detail_count, 3)
         self.assertEqual(rows[0].detail_length_mm, 3000.0)
+        self.assertEqual(rows[0].wall_thickness_mm, 1.5)
+        self.assertEqual(rows[0].to_table_row()[2:4], ["25.0×25.0×1.5", "1.5"])
 
     def test_purchase_uses_chuck_remainder_as_unusable_stock_length(self) -> None:
         first = FileJob(Path("a.step"), status=STATUS_IMPORTED)

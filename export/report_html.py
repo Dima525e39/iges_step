@@ -325,7 +325,8 @@ def _purchase_table(rows: list[TubePurchaseRow], *, commercial: bool) -> str:
     if commercial:
         headers = [
             "Материал",
-            "Труба",
+            "Размер",
+            "Толщина",
             "Деталей",
             "Длина деталей",
             "Хлыст",
@@ -339,6 +340,7 @@ def _purchase_table(rows: list[TubePurchaseRow], *, commercial: bool) -> str:
                 for value in [
                     row.material,
                     row.tube_size,
+                    f"{row.wall_thickness_mm:.1f} мм" if row.wall_thickness_mm > 0.0 else "—",
                     str(row.detail_count),
                     f"{row.detail_length_mm:.1f} мм",
                     f"{row.stock_length_mm:.1f} мм",
@@ -354,6 +356,7 @@ def _purchase_table(rows: list[TubePurchaseRow], *, commercial: bool) -> str:
             "Материал",
             "Тип",
             "Размер",
+            "Толщина",
             "Деталей",
             "Длина деталей",
             "Припуски",
@@ -373,6 +376,7 @@ def _purchase_table(rows: list[TubePurchaseRow], *, commercial: bool) -> str:
                     row.material,
                     row.tube_type,
                     row.tube_size,
+                    f"{row.wall_thickness_mm:.1f}" if row.wall_thickness_mm > 0.0 else "—",
                     str(row.detail_count),
                     f"{row.detail_length_mm:.1f}",
                     f"{row.allowances_mm:.1f}",

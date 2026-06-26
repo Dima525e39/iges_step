@@ -53,7 +53,7 @@ from pricing.price_selector import calculate_job_price
 from pricing.material_cost import calculate_tube_material_cost
 from purchase.tube_grouping import number_from_text
 from purchase.tube_purchase_calculator import TubePurchaseRow, calculate_tube_purchase
-from settings.contractors_manager import default_contractor
+from settings.contractors_manager import contractors_from_settings, default_contractor
 from settings.materials_manager import default_material, materials_from_settings
 from settings.settings_manager import SettingsManager
 from settings.tube_purchase_settings import TubePurchaseSettings
@@ -471,10 +471,15 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Импорт", "Список файлов пуст.")
             return
         jobs = self.queue.jobs()
-        material, customer_tube = self._choose_material_for_bulk_processing(jobs)
+        material, contractor, customer_tube = self._choose_material_for_bulk_processing(jobs)
         if not material:
             return
-        self._set_material_for_jobs(jobs, material, customer_tube=customer_tube)
+        self._set_bulk_parameters_for_jobs(
+            jobs,
+            material=material,
+            contractor=contractor,
+            customer_tube=customer_tube,
+        )
         self._start_import([job.normalized_path for job in jobs])
 
     def _save_project(self) -> None:
@@ -831,18 +836,50 @@ class MainWindow(QMainWindow):
             4000,
         )
 
-    def _choose_material_for_bulk_processing(self, jobs: list[FileJob]) -> tuple[str, bool]:
+    def _choose_material_for_bulk_processing(self, jobs: list[FileJob]) -> tuple[str, str, bool]:
         current_material = ""
+        current_contractor = ""
         if jobs:
             current_material = jobs[0].material
+            current_contractor = jobs[0].contractor
         dialog = MaterialSelectionDialog(
             self._material_choices(),
+            self._contractor_choices(),
             current_material=current_material,
+            current_contractor=current_contractor,
             parent=self,
         )
         if dialog.exec() != QDialog.DialogCode.Accepted:
-            return "", True
-        return dialog.selected_material(), dialog.is_customer_tube()
+            return "", "", True
+        return (
+            dialog.selected_material(),
+            dialog.selected_contractor(),
+            dialog.is_customer_tube(),
+        )
+
+    def _set_bulk_parameters_for_jobs(
+        self,
+        jobs: list[FileJob],
+        *,
+        material: str,
+        contractor: str,
+        customer_tube: bool,
+    ) -> None:
+        if not material:
+            return
+        for job in jobs:
+            changed = (
+                job.material != material
+                or job.contractor != contractor
+                or job.customer_tube != customer_tube
+            )
+            if not changed:
+                continue
+            job.material = material
+            if contractor:
+                job.contractor = contractor
+            job.customer_tube = customer_tube
+            self._recalculate_job_price(job)
 
     def _set_material_for_jobs(
         self,
@@ -978,6 +1015,15 @@ class MainWindow(QMainWindow):
         materials = materials_from_settings(settings)
         choices = [material.name for material in materials if material.active]
         default = default_material(settings).name
+        if default and default not in choices:
+            choices.insert(0, default)
+        return choices
+
+    def _contractor_choices(self) -> list[str]:
+        settings = self.settings_manager.as_dict()
+        contractors = contractors_from_settings(settings)
+        choices = [contractor.name for contractor in contractors]
+        default = default_contractor(settings).name
         if default and default not in choices:
             choices.insert(0, default)
         return choices

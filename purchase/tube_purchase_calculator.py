@@ -16,6 +16,7 @@ class TubePurchaseRow:
     material: str
     tube_type: str
     tube_size: str
+    wall_thickness_mm: float
     detail_count: int
     detail_length_mm: float
     allowances_mm: float
@@ -33,6 +34,7 @@ class TubePurchaseRow:
             self.material,
             self.tube_type,
             self.tube_size,
+            _format_thickness(self.wall_thickness_mm),
             str(self.detail_count),
             f"{self.detail_length_mm:.1f}",
             f"{self.allowances_mm:.1f}",
@@ -108,6 +110,7 @@ def calculate_tube_purchase(
                 material=group.material,
                 tube_type=group.tube_type,
                 tube_size=group.tube_size,
+                wall_thickness_mm=group.wall_thickness_mm,
                 detail_count=result.detail_count,
                 detail_length_mm=result.detail_length_mm,
                 allowances_mm=result.allowances_mm,
@@ -122,3 +125,7 @@ def calculate_tube_purchase(
             )
         )
     return rows
+
+
+def _format_thickness(value: float) -> str:
+    return f"{value:.1f}" if value > 0.0 else "—"

@@ -11,7 +11,8 @@ class StockPurchaseWidget(QWidget):
     HEADERS = [
         "Материал",
         "Тип трубы",
-        "Размер / толщина",
+        "Размер",
+        "Толщина, мм",
         "Деталей",
         "Длина деталей, мм",
         "Припуски, мм",
@@ -51,7 +52,7 @@ class StockPurchaseWidget(QWidget):
         for row_index, row in enumerate(rows):
             values = row.to_table_row(show_purchase_cost=purchase_settings.show_purchase_cost)
             if not purchase_settings.show_purchase_cost:
-                values.insert(12, "—")
+                values.insert(13, "—")
             for column, value in enumerate(values):
                 item = QTableWidgetItem(value)
                 if column >= 3:

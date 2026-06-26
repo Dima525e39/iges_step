@@ -34,12 +34,14 @@ def select_price_rule(
 ) -> PricingSelection:
     rules = [rule for rule in pricing_rules_from_settings(settings) if rule.active]
     tolerance = float(settings.get("pricing", {}).get("thickness_tolerance_mm", 0.25) or 0.25)
+    contractor_key = _key(contractor)
+    material_key = _key(material)
 
     exact = [
         rule
         for rule in rules
-        if rule.contractor == contractor
-        and rule.material == material
+        if _key(rule.contractor) == contractor_key
+        and _key(rule.material) == material_key
         and abs(rule.thickness_mm - thickness_mm) <= 1e-6
     ]
     if exact:
@@ -48,8 +50,8 @@ def select_price_rule(
     nearby = [
         rule
         for rule in rules
-        if rule.contractor == contractor
-        and rule.material == material
+        if _key(rule.contractor) == contractor_key
+        and _key(rule.material) == material_key
         and abs(rule.thickness_mm - thickness_mm) <= tolerance
     ]
     if nearby:
@@ -60,6 +62,58 @@ def select_price_rule(
             warning=(
                 f"Для толщины {thickness_mm:.2f} мм использована ближайшая цена "
                 f"{rule.thickness_mm:.2f} мм."
+            ),
+        )
+
+    material_rules = [rule for rule in rules if _key(rule.material) == material_key]
+    material_exact = [
+        rule for rule in material_rules if abs(rule.thickness_mm - thickness_mm) <= 1e-6
+    ]
+    if material_exact:
+        rule = _prefer_default_contractor(material_exact)
+        return PricingSelection(
+            rule=rule,
+            source="правило материала",
+            warning=(
+                f"Для контрагента {contractor} не найдена отдельная цена. "
+                f"Использована цена материала {material}."
+            ),
+        )
+
+    material_nearby = [
+        rule for rule in material_rules if abs(rule.thickness_mm - thickness_mm) <= tolerance
+    ]
+    if material_nearby:
+        rule = min(
+            material_nearby,
+            key=lambda item: (
+                abs(item.thickness_mm - thickness_mm),
+                0 if _key(item.contractor) == "по умолчанию" else 1,
+            ),
+        )
+        return PricingSelection(
+            rule=rule,
+            source="ближайшая цена материала",
+            warning=(
+                f"Для материала {material} и толщины {thickness_mm:.2f} мм "
+                f"использована ближайшая цена {rule.thickness_mm:.2f} мм."
+            ),
+        )
+
+    if material_rules:
+        rule = min(
+            material_rules,
+            key=lambda item: (
+                abs(item.thickness_mm - thickness_mm),
+                0 if _key(item.contractor) == "по умолчанию" else 1,
+            ),
+        )
+        return PricingSelection(
+            rule=rule,
+            source="цена материала",
+            warning=(
+                f"Для материала {material} не найдена цена толщины {thickness_mm:.2f} мм. "
+                f"Использована ближайшая строка материала: {rule.thickness_mm:.2f} мм."
             ),
         )
 
@@ -90,6 +144,14 @@ def select_price_rule(
             "Использована цена по умолчанию."
         ),
     )
+
+
+def _key(value: object) -> str:
+    return str(value).strip().lower()
+
+
+def _prefer_default_contractor(rules: list[PriceRule]) -> PriceRule:
+    return next((rule for rule in rules if _key(rule.contractor) == "по умолчанию"), rules[0])
 
 
 def calculate_job_price(
