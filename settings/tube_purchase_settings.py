@@ -16,7 +16,7 @@ class TubePurchaseSettings:
     round_to_whole_stock: bool = True
     show_in_commercial_offer: bool = True
     show_in_technical_report: bool = True
-    show_purchase_cost: bool = False
+    show_purchase_cost: bool = True
 
     @classmethod
     def from_settings(cls, settings: dict[str, Any]) -> "TubePurchaseSettings":
@@ -38,7 +38,7 @@ class TubePurchaseSettings:
             round_to_whole_stock=bool(data.get("round_to_whole_stock", True)),
             show_in_commercial_offer=bool(data.get("show_in_commercial_offer", True)),
             show_in_technical_report=bool(data.get("show_in_technical_report", True)),
-            show_purchase_cost=bool(data.get("show_purchase_cost", False)),
+            show_purchase_cost=bool(data.get("show_purchase_cost", True)),
         )
 
     def to_dict(self) -> dict[str, Any]:

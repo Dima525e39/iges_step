@@ -50,9 +50,7 @@ class StockPurchaseWidget(QWidget):
     ) -> None:
         self.table.setRowCount(len(rows))
         for row_index, row in enumerate(rows):
-            values = row.to_table_row(show_purchase_cost=purchase_settings.show_purchase_cost)
-            if not purchase_settings.show_purchase_cost:
-                values.insert(13, "—")
+            values = row.to_table_row(show_purchase_cost=True)
             for column, value in enumerate(values):
                 item = QTableWidgetItem(value)
                 if column >= 3:

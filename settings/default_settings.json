@@ -108,7 +108,7 @@
     "round_to_whole_stock": true,
     "show_in_commercial_offer": true,
     "show_in_technical_report": true,
-    "show_purchase_cost": false
+    "show_purchase_cost": true
   },
   "logo": {
     "path": "",

@@ -90,21 +90,20 @@ def calculate_tube_purchase(
             )
         )
         cost = 0.0
-        if purchase_settings.show_purchase_cost:
-            price_per_stock = (
-                tube_price.tube_price_per_stock
-                if tube_price is not None and tube_price.tube_price_per_stock > 0.0
-                else material.tube_price_per_stock
-            )
-            price_per_meter = (
-                tube_price.tube_price_per_meter
-                if tube_price is not None and tube_price.tube_price_per_meter > 0.0
-                else material.tube_price_per_meter
-            )
-            if price_per_stock > 0.0:
-                cost = result.stock_count * price_per_stock
-            elif price_per_meter > 0.0:
-                cost = result.purchase_length_mm / 1000.0 * price_per_meter
+        price_per_stock = (
+            tube_price.tube_price_per_stock
+            if tube_price is not None and tube_price.tube_price_per_stock > 0.0
+            else material.tube_price_per_stock
+        )
+        price_per_meter = (
+            tube_price.tube_price_per_meter
+            if tube_price is not None and tube_price.tube_price_per_meter > 0.0
+            else material.tube_price_per_meter
+        )
+        if price_per_stock > 0.0:
+            cost = result.stock_count * price_per_stock
+        elif price_per_meter > 0.0:
+            cost = result.purchase_length_mm / 1000.0 * price_per_meter
         rows.append(
             TubePurchaseRow(
                 material=group.material,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -57,7 +58,7 @@ def select_tube_price_rule(
         for rule in tube_price_rules_from_settings(settings)
         if rule.active
         and rule.material == material
-        and _normalize_size(rule.tube_size) == _normalize_size(tube_size)
+        and _sizes_match(rule.tube_size, tube_size, wall_thickness_mm)
     ]
     if not rules:
         return None
@@ -78,10 +79,49 @@ def select_tube_price_rule(
 
 
 def _normalize_size(value: str) -> str:
-    return (
-        value.strip()
+    normalized = (
+        str(value)
+        .strip()
         .lower()
         .replace(" ", "")
         .replace("x", "×")
         .replace("*", "×")
+        .replace("ø", "Ø")
     )
+    return re.sub(r"-?\d+(?:[.,]\d+)?", _normalize_number, normalized)
+
+
+def _sizes_match(rule_size: str, tube_size: str, wall_thickness_mm: float) -> bool:
+    rule_normalized = _normalize_size(rule_size)
+    tube_normalized = _normalize_size(tube_size)
+    if rule_normalized == tube_normalized:
+        return True
+    return _normalize_size(_without_trailing_thickness(rule_size, wall_thickness_mm)) == (
+        _normalize_size(_without_trailing_thickness(tube_size, wall_thickness_mm))
+    )
+
+
+def _without_trailing_thickness(value: str, wall_thickness_mm: float) -> str:
+    if wall_thickness_mm <= 0.0:
+        return value
+    parts = str(value).replace("x", "×").replace("*", "×").split("×")
+    if len(parts) < 3:
+        return value
+    last_number = _last_number(parts[-1])
+    if last_number is None:
+        return value
+    if abs(last_number - wall_thickness_mm) > 1e-6:
+        return value
+    return "×".join(parts[:-1])
+
+
+def _last_number(value: str) -> float | None:
+    matches = re.findall(r"-?\d+(?:[.,]\d+)?", value)
+    if not matches:
+        return None
+    return float(matches[-1].replace(",", "."))
+
+
+def _normalize_number(match: re.Match[str]) -> str:
+    number = float(match.group(0).replace(",", "."))
+    return f"{number:.6f}".rstrip("0").rstrip(".")

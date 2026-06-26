@@ -427,6 +427,73 @@ class PricingPurchaseProjectTests(unittest.TestCase):
         self.assertEqual(rows[0].stock_count, 1)
         self.assertAlmostEqual(rows[0].purchase_cost, 9000.0)
 
+    def test_purchase_cost_is_calculated_even_when_report_cost_is_hidden(self) -> None:
+        job = FileJob(Path("tube.step"), status=STATUS_IMPORTED)
+        job.material = "Сталь"
+        job.tube_type = "Круглая труба"
+        job.tube_size = "Ø35.0"
+        job.wall_thickness_mm = "2.5 мм"
+        job.tube_length_mm = "1000.0 мм"
+
+        rows = calculate_tube_purchase(
+            [job],
+            {
+                "materials": [{"id": "steel", "name": "Сталь", "is_default": True}],
+                "tube_prices": [
+                    {
+                        "material": "Сталь",
+                        "tube_size": "Ø35",
+                        "wall_thickness_mm": 2.5,
+                        "standard_stock_length_mm": 6000.0,
+                        "tube_price_per_stock": 9000.0,
+                        "active": True,
+                    }
+                ],
+                "purchase": {
+                    "standard_stock_length_mm": 6000.0,
+                    "stock_allowance_percent": 0.0,
+                    "include_part_gap": False,
+                    "chuck_remainder_mm": 0.0,
+                    "show_purchase_cost": False,
+                },
+            },
+        )
+
+        self.assertAlmostEqual(rows[0].purchase_cost, 9000.0)
+
+    def test_purchase_price_matches_profile_size_without_embedded_thickness(self) -> None:
+        job = FileJob(Path("tube.step"), status=STATUS_IMPORTED)
+        job.material = "Сталь"
+        job.tube_type = "профильная труба"
+        job.tube_size = "25.0×25.0×1.5"
+        job.wall_thickness_mm = "1.5 мм"
+        job.tube_length_mm = "1000.0 мм"
+
+        rows = calculate_tube_purchase(
+            [job],
+            {
+                "materials": [{"id": "steel", "name": "Сталь", "is_default": True}],
+                "tube_prices": [
+                    {
+                        "material": "Сталь",
+                        "tube_size": "25×25",
+                        "wall_thickness_mm": 1.5,
+                        "standard_stock_length_mm": 6000.0,
+                        "tube_price_per_meter": 1000.0,
+                        "active": True,
+                    }
+                ],
+                "purchase": {
+                    "standard_stock_length_mm": 6000.0,
+                    "stock_allowance_percent": 0.0,
+                    "include_part_gap": False,
+                    "chuck_remainder_mm": 0.0,
+                },
+            },
+        )
+
+        self.assertAlmostEqual(rows[0].purchase_cost, 6000.0)
+
     def test_invoice_html_uses_requisites_and_hides_disabled_logo(self) -> None:
         job = FileJob(Path("tube.step"), status=STATUS_IMPORTED)
         job.cut_length_mm = "1000.0 мм"
