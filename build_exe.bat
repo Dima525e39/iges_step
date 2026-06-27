@@ -35,7 +35,7 @@ if errorlevel 1 (
     if errorlevel 1 exit /b 1
 )
 
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$date=(Get-Date).ToString('yyyy-MM-dd HH:mm:ss'); Set-Content -Encoding UTF8 app_build.py @('from __future__ import annotations','','APP_BUILD_COMMIT = ''%BUILD_COMMIT%''','APP_BUILD_DATE = ''' + $date + '''','CALC_CORE_REVISION = ''round-iges-fallback-v2'''); Set-Content -Encoding UTF8 version.txt @('TubeCutCalculator v0.5.5','Build date: ' + $date,'Build commit: %BUILD_COMMIT%','Calc core: round-iges-fallback-v2','Description: Verifies packaged build identity and improves round IGES diagnostics.')"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$date=(Get-Date).ToString('yyyy-MM-dd HH:mm:ss'); @('from __future__ import annotations','','APP_BUILD_COMMIT = \"' + $env:BUILD_COMMIT + '\"','APP_BUILD_DATE = \"' + $date + '\"','CALC_CORE_REVISION = \"round-iges-fallback-v2\"') | Set-Content -Encoding UTF8 app_build.py; @('TubeCutCalculator v0.5.5','Build date: ' + $date,'Build commit: ' + $env:BUILD_COMMIT,'Calc core: round-iges-fallback-v2','Description: Verifies packaged build identity and improves round IGES diagnostics.') | Set-Content -Encoding UTF8 version.txt"
 if errorlevel 1 exit /b 1
 
 echo Generated build identity:
