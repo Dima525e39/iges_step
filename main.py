@@ -3,7 +3,13 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from app_info import APP_NAME, APP_VERSION
+from app_info import (
+    APP_BUILD_COMMIT,
+    APP_BUILD_DATE,
+    APP_NAME,
+    APP_VERSION,
+    CALC_CORE_REVISION,
+)
 
 
 def main() -> int:
@@ -45,6 +51,12 @@ def _run_import_self_test(output_path: Path | None) -> int:
     exit_code = 0
     try:
         record(f"{APP_NAME} {APP_VERSION} import self-test")
+        record(f"Build commit: {APP_BUILD_COMMIT}")
+        record(f"Build date: {APP_BUILD_DATE}")
+        record(f"Calc core: {CALC_CORE_REVISION}")
+        if getattr(sys, "frozen", False) and APP_BUILD_COMMIT in {"", "local", "unknown"}:
+            raise RuntimeError("packaged build is missing app_build.py identity")
+
         from PySide6.QtCore import qVersion
 
         record(f"PySide6 Qt {qVersion()}: OK")

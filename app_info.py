@@ -12,7 +12,7 @@ try:
 except Exception:
     APP_BUILD_COMMIT = "unknown"
     APP_BUILD_DATE = "unknown"
-    CALC_CORE_REVISION = "round-iges-fallback-v2"
+    CALC_CORE_REVISION = "unknown"
 
 
 def build_label() -> str:
