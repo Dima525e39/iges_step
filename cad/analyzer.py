@@ -11,6 +11,7 @@ from cad.pierce_counter import count_edge_components
 from cad.profile_detector import detect_profile_from_dimensions
 from cad.shape_summary import ShapeSummary, _count_topology, summarize_shape
 from cad.sheet_analyzer import SheetAnalysisResult, analyze_sheet_shape
+from cad.step_text_analyzer import analyze_step_round_tube_text
 
 
 @dataclass(slots=True)
@@ -304,6 +305,33 @@ def analyze_shape(
                 "проверьте результат через DEV-скрипт."
             )
 
+    step_text_analysis = (
+        analyze_step_round_tube_text(source_path)
+        if source_path is not None
+        else None
+    )
+    if step_text_analysis is not None and _should_use_step_round_text_analysis(
+        current_cut_length_mm=cut_length_mm,
+        current_pierce_count=pierce_count,
+        current_cut_feature_length_mm=cut_feature_length_mm,
+        step_pierce_count=step_text_analysis.pierce_count,
+    ):
+        profile_hint = "Круглая труба"
+        width_mm = step_text_analysis.outer_diameter_mm
+        height_mm = step_text_analysis.outer_diameter_mm
+        length_mm = step_text_analysis.length_mm or length_mm
+        round_outer_diameter_mm = step_text_analysis.outer_diameter_mm
+        wall_thickness_mm = step_text_analysis.wall_thickness_mm
+        wall_thickness_method = "STEP pcurve наружный/внутренний цилиндр"
+        wall_thickness_confidence = "высокая"
+        cut_length_mm = step_text_analysis.cut_length_mm
+        cut_end_length_mm = step_text_analysis.cut_end_length_mm
+        cut_feature_length_mm = step_text_analysis.cut_feature_length_mm
+        diagnostic_edge_length_mm = max(diagnostic_edge_length_mm, cut_length_mm)
+        pierce_count = step_text_analysis.pierce_count
+        cut_edge_count = step_text_analysis.pierce_count
+        warnings.extend(step_text_analysis.warnings)
+
     return GeometryAnalysisResult(
         file_format=file_format,
         profile_hint=profile_hint,
@@ -350,3 +378,19 @@ def _count_topology_safely(shape: object, top_abs_name: str, warnings: list[str]
     except Exception as exc:
         warnings.append(f"Не удалось посчитать {top_abs_name}: {exc}")
         return 0
+
+
+def _should_use_step_round_text_analysis(
+    *,
+    current_cut_length_mm: float,
+    current_pierce_count: int,
+    current_cut_feature_length_mm: float,
+    step_pierce_count: int,
+) -> bool:
+    if step_pierce_count <= 0:
+        return False
+    if current_cut_length_mm <= 0.0:
+        return True
+    if current_cut_feature_length_mm > 0.0:
+        return False
+    return current_pierce_count <= step_pierce_count

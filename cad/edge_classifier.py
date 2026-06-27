@@ -783,7 +783,7 @@ def _estimate_round_tube_thickness_from_bounds(
     if profile is None:
         return ThicknessEstimate()
 
-    outer_radius, inner_radius = profile
+    outer_radius, inner_radius, _tube_center = profile
     thickness = outer_radius - inner_radius
     if thickness <= tolerance:
         return ThicknessEstimate()
@@ -1382,7 +1382,7 @@ def _analyze_round_tube_bspline_bbox_fallback(
     if profile is None:
         return CutFaceAnalysis()
 
-    outer_radius, inner_radius = profile
+    outer_radius, inner_radius, tube_center = profile
     wall_thickness = outer_radius - inner_radius
     if wall_thickness <= tolerance:
         return CutFaceAnalysis()
@@ -1396,6 +1396,7 @@ def _analyze_round_tube_bspline_bbox_fallback(
             outer_radius=outer_radius,
             wall_thickness=wall_thickness,
             global_bounds=global_bounds,
+            tube_center=tube_center,
             tolerance=tolerance,
         ):
             continue
@@ -1419,6 +1420,7 @@ def _analyze_round_tube_bspline_bbox_fallback(
             outer_radius=outer_radius,
             wall_thickness=wall_thickness,
             global_bounds=global_bounds,
+            tube_center=tube_center,
             tolerance=tolerance,
         ):
             continue
@@ -1453,17 +1455,10 @@ def _round_tube_bbox_profile(
     length_mm: float,
     global_bounds: Bounds,
     tolerance: float,
-) -> tuple[float, float] | None:
-    if not _global_bounds_looks_round_tube(
-        axis=axis,
-        global_bounds=global_bounds,
-        tolerance=tolerance,
-    ):
-        return None
-
+) -> tuple[float, float, tuple[float, float, float]] | None:
     axis_index = AXIS_INDEX[axis]
     cross_indexes = [index for index in range(3) if index != axis_index]
-    diameters: list[float] = []
+    candidates: list[tuple[float, FaceRecord]] = []
     for face in face_records:
         if face.bounds.sizes[axis_index] < max(length_mm * 0.65, tolerance):
             continue
@@ -1472,27 +1467,35 @@ def _round_tube_bbox_profile(
         cross_max = max(cross_sizes)
         if cross_min <= tolerance or cross_min / cross_max < 0.75:
             continue
-        diameters.append((cross_min + cross_max) / 2.0)
+        candidates.append(((cross_min + cross_max) / 2.0, face))
 
+    diameters = [diameter for diameter, _face in candidates]
     distinct = _distinct_sorted(diameters, tolerance=max(tolerance * 5.0, 0.2))
     if len(distinct) < 2:
         return None
 
     outer_diameter = distinct[-1]
     inner_diameter = distinct[-2]
-    expected_outer_radius = _expected_round_outer_radius(
-        axis=axis,
-        global_bounds=global_bounds,
-        tolerance=tolerance,
-    )
-    if expected_outer_radius <= tolerance:
-        return None
-    expected_outer_diameter = expected_outer_radius * 2.0
-    if abs(outer_diameter - expected_outer_diameter) > max(expected_outer_diameter * 0.08, 1.0):
-        return None
     if outer_diameter <= inner_diameter + tolerance:
         return None
-    return outer_diameter / 2.0, inner_diameter / 2.0
+    if inner_diameter / outer_diameter < 0.35:
+        return None
+
+    diameter_tolerance = max(tolerance * 5.0, 0.2)
+    outer_faces = [
+        face for diameter, face in candidates if abs(diameter - outer_diameter) <= diameter_tolerance
+    ]
+    center = [
+        (global_bounds.mins[index] + global_bounds.maxes[index]) / 2.0
+        for index in range(3)
+    ]
+    for index in cross_indexes:
+        if outer_faces:
+            center[index] = (
+                min(face.bounds.mins[index] for face in outer_faces)
+                + max(face.bounds.maxes[index] for face in outer_faces)
+            ) / 2.0
+    return outer_diameter / 2.0, inner_diameter / 2.0, tuple(center)
 
 
 def _is_round_bbox_outer_end_edge(
@@ -1502,6 +1505,7 @@ def _is_round_bbox_outer_end_edge(
     outer_radius: float,
     wall_thickness: float,
     global_bounds: Bounds,
+    tube_center: tuple[float, float, float],
     tolerance: float,
 ) -> bool:
     if edge.bounds is None or edge.length_mm <= tolerance:
@@ -1520,6 +1524,7 @@ def _is_round_bbox_outer_end_edge(
         edge,
         axis=axis,
         global_bounds=global_bounds,
+        tube_center=tube_center,
     ) >= _round_bbox_outer_threshold(
         outer_radius=outer_radius,
         wall_thickness=wall_thickness,
@@ -1535,6 +1540,7 @@ def _is_round_bbox_outer_feature_edge(
     outer_radius: float,
     wall_thickness: float,
     global_bounds: Bounds,
+    tube_center: tuple[float, float, float],
     tolerance: float,
 ) -> bool:
     if edge.bounds is None or edge.length_mm <= tolerance:
@@ -1558,6 +1564,7 @@ def _is_round_bbox_outer_feature_edge(
         edge,
         axis=axis,
         global_bounds=global_bounds,
+        tube_center=tube_center,
     ) >= _round_bbox_outer_threshold(
         outer_radius=outer_radius,
         wall_thickness=wall_thickness,
@@ -1648,6 +1655,7 @@ def _edge_outer_measure(
     *,
     axis: str,
     global_bounds: Bounds,
+    tube_center: tuple[float, float, float] | None = None,
 ) -> float:
     if edge.bounds is None:
         return 0.0
@@ -1656,7 +1664,11 @@ def _edge_outer_measure(
     for index in range(3):
         if index == axis_index:
             continue
-        center = (global_bounds.mins[index] + global_bounds.maxes[index]) / 2.0
+        center = (
+            tube_center[index]
+            if tube_center is not None
+            else (global_bounds.mins[index] + global_bounds.maxes[index]) / 2.0
+        )
         values.append(abs(edge.bounds.mins[index] - center))
         values.append(abs(edge.bounds.maxes[index] - center))
     return max(values, default=0.0)

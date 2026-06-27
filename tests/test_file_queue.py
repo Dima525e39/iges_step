@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 import types
 import unittest
+from pathlib import Path
 
 from cad.analyzer import GeometryAnalysisResult, analyze_shape
 from cad.edge_classifier import (
@@ -36,6 +37,7 @@ from cad.importer import CadImportError, CadImporter, _sew_iges_shape
 from cad.pierce_counter import _count_components_from_pairs
 from cad.profile_detector import detect_profile_from_dimensions
 from cad.shape_summary import ShapeSummary
+from cad.step_text_analyzer import analyze_step_round_tube_text
 from cad.supported_formats import collect_supported_files, is_supported_cad_file
 from core.file_job import parse_quantity_from_filename
 from core.file_queue import FileQueue
@@ -778,7 +780,7 @@ class GeometryAnalyzerTests(unittest.TestCase):
             edges,
             axis="X",
             length_mm=3910.0,
-            global_bounds=Bounds(0.0, -66.5, -66.5, 3910.0, 66.5, 66.5),
+            global_bounds=Bounds(0.0, -133.0, -66.5, 3910.0, 133.0, 72.821),
             has_outer_faces=False,
             tolerance=0.01,
         )
@@ -787,7 +789,7 @@ class GeometryAnalyzerTests(unittest.TestCase):
             edges,
             axis="X",
             length_mm=3910.0,
-            global_bounds=Bounds(0.0, -66.5, -66.5, 3910.0, 66.5, 66.5),
+            global_bounds=Bounds(0.0, -133.0, -66.5, 3910.0, 133.0, 72.821),
             tolerance=0.01,
         )
 
@@ -797,6 +799,53 @@ class GeometryAnalyzerTests(unittest.TestCase):
         self.assertAlmostEqual(sum(edge.length_mm for edge in analysis.cut_edges), 8197.137420)
         self.assertAlmostEqual(estimate.thickness_mm, 6.0)
         self.assertEqual(estimate.method, "bbox круглой BSpline-трубы R_outer - R_inner")
+
+    def test_step_round_tube_text_analysis_keeps_slanted_end_length(self) -> None:
+        from tempfile import TemporaryDirectory
+
+        step_text = """
+ISO-10303-21;
+DATA;
+#21 = EDGE_CURVE('',#22,#22,#24,.T.);
+#24 = SURFACE_CURVE('',#25,(#30),.PCURVE_S1.);
+#30 = PCURVE('',#31,#36);
+#31 = CYLINDRICAL_SURFACE('',#32,21.15);
+#36 = DEFINITIONAL_REPRESENTATION('',(#37),#47);
+#37 = B_SPLINE_CURVE_WITH_KNOTS('',8,(#38,#39,#40,#41,#42,#43,#44,#45,#46),
+  .UNSPECIFIED.,.F.,.F.,(9,9),(0.,6.28318530718),.PIECEWISE_BEZIER_KNOTS.);
+#38 = CARTESIAN_POINT('',(-6.28318530718,-33.84137342829));
+#39 = CARTESIAN_POINT('',(-5.497787143782,-33.84137342829));
+#40 = CARTESIAN_POINT('',(-4.712388980386,-39.87681422705));
+#41 = CARTESIAN_POINT('',(-3.92699081698,-51.69378024837));
+#42 = CARTESIAN_POINT('',(-3.14159265362,-62.83701688579));
+#43 = CARTESIAN_POINT('',(-2.356194490184,-51.69378024854));
+#44 = CARTESIAN_POINT('',(-1.570796326798,-39.87681422705));
+#45 = CARTESIAN_POINT('',(-0.785398163397,-33.84137342829));
+#46 = CARTESIAN_POINT('',(0.,-33.84137342829));
+#82 = EDGE_CURVE('',#62,#62,#83,.T.);
+#83 = SURFACE_CURVE('',#84,(#89),.PCURVE_S1.);
+#89 = PCURVE('',#31,#90);
+#90 = DEFINITIONAL_REPRESENTATION('',(#91),#94);
+#91 = B_SPLINE_CURVE_WITH_KNOTS('',1,(#92,#93),.UNSPECIFIED.,.F.,.F.,
+  (2,2),(0.,6.28318530718),.PIECEWISE_BEZIER_KNOTS.);
+#92 = CARTESIAN_POINT('',(0.,-4.52192E+03));
+#93 = CARTESIAN_POINT('',(-6.28318530718,-4.52192E+03));
+#132 = CYLINDRICAL_SURFACE('',#133,18.35);
+ENDSEC;
+END-ISO-10303-21;
+"""
+        with TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "tube.stp"
+            path.write_text(step_text, encoding="utf-8")
+            analysis = analyze_step_round_tube_text(path)
+
+        self.assertIsNotNone(analysis)
+        assert analysis is not None
+        self.assertAlmostEqual(analysis.outer_diameter_mm, 42.3)
+        self.assertAlmostEqual(analysis.wall_thickness_mm, 2.8)
+        self.assertAlmostEqual(analysis.length_mm, 4521.92)
+        self.assertEqual(analysis.pierce_count, 2)
+        self.assertAlmostEqual(analysis.cut_length_mm, 271.028, places=3)
 
     def test_round_tube_loop_analysis_accepts_outer_cylinder_without_inner_radius(self) -> None:
         import cad.edge_classifier as edge_classifier
