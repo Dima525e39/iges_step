@@ -1518,11 +1518,11 @@ END-ISO-10303-21;
             content,
         )
         self.assertIn(
-            "part.step,v0.5.4,local,round-iges-fallback-v2,1,30.000000,CUT_FEATURE,yes",
+            "part.step,v0.5.5,local,round-iges-fallback-v2,1,30.000000,CUT_FEATURE,yes",
             content,
         )
         self.assertIn(
-            "part.step,v0.5.4,local,round-iges-fallback-v2,2,1000.000000,IGNORED_LONGITUDINAL,no",
+            "part.step,v0.5.5,local,round-iges-fallback-v2,2,1000.000000,IGNORED_LONGITUDINAL,no",
             content,
         )
 

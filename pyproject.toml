@@ -1,6 +1,6 @@
 [project]
 name = "tube-cut-calculator"
-version = "0.5.4"
+version = "0.5.5"
 description = "Windows GUI calculator for laser tube cutting, sheet DXF contours, nesting, pricing, tube purchase, reports, and STEP/IGES preview."
 requires-python = ">=3.13"
 dependencies = [

@@ -1,3 +1,5 @@
-TubeCutCalculator v0.5.4
-Build date: 2026-06-24
-Description: Adds first true-shape/NFP-like nesting engine with contour collision checks, arbitrary angle step rotation, and real-contour area efficiency.
+TubeCutCalculator v0.5.5
+Build date: local
+Build commit: local
+Calc core: round-iges-fallback-v2
+Description: Verifies packaged build identity and improves diagnostics for round IGES tube analysis.
