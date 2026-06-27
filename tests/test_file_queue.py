@@ -917,6 +917,71 @@ END-ISO-10303-21;
         self.assertAlmostEqual(analysis.wall_thickness_mm, 2.8)
         self.assertEqual(analysis.pierce_count, 2)
 
+    def test_step_round_tube_text_analysis_wins_over_sheet_like_bbox(self) -> None:
+        from tempfile import TemporaryDirectory
+
+        step_text = """
+ISO-10303-21;
+DATA;
+#21 = EDGE_CURVE('',#22,#24,#26,.T.);
+#26 = SEAM_CURVE('',#27,(#31),.PCURVE_S1.);
+#31 = PCURVE('',#32,#36);
+#32 = CYLINDRICAL_SURFACE('',#33,21.15);
+#36 = DEFINITIONAL_REPRESENTATION('',(#37),#47);
+#37 = B_SPLINE_CURVE_WITH_KNOTS('',1,(#38,#39),.UNSPECIFIED.,.F.,.F.,
+  (2,2),(0.,1.),.PIECEWISE_BEZIER_KNOTS.);
+#38 = CARTESIAN_POINT('',(0.,-3956.92));
+#39 = CARTESIAN_POINT('',(0.,0.));
+#49 = EDGE_CURVE('',#22,#22,#50,.T.);
+#50 = SURFACE_CURVE('',#51,(#56),.PCURVE_S1.);
+#56 = PCURVE('',#32,#60);
+#60 = DEFINITIONAL_REPRESENTATION('',(#61),#70);
+#61 = B_SPLINE_CURVE_WITH_KNOTS('',1,(#62,#63),.UNSPECIFIED.,.F.,.F.,
+  (2,2),(0.,6.28318530718),.PIECEWISE_BEZIER_KNOTS.);
+#62 = CARTESIAN_POINT('',(0.,-3956.92));
+#63 = CARTESIAN_POINT('',(-6.28318530718,-3956.92));
+#82 = EDGE_CURVE('',#24,#24,#83,.T.);
+#83 = SURFACE_CURVE('',#84,(#89),.PCURVE_S1.);
+#89 = PCURVE('',#32,#90);
+#90 = DEFINITIONAL_REPRESENTATION('',(#91),#94);
+#91 = B_SPLINE_CURVE_WITH_KNOTS('',1,(#92,#93),.UNSPECIFIED.,.F.,.F.,
+  (2,2),(0.,6.28318530718),.PIECEWISE_BEZIER_KNOTS.);
+#92 = CARTESIAN_POINT('',(0.,0.));
+#93 = CARTESIAN_POINT('',(-6.28318530718,0.));
+#132 = CYLINDRICAL_SURFACE('',#133,18.35);
+#145 = EDGE_CURVE('',#146,#147,#148,.T.);
+#148 = SEAM_CURVE('',#149,(#150),.PCURVE_S1.);
+#150 = PCURVE('',#132,#151);
+#151 = DEFINITIONAL_REPRESENTATION('',(#152),#155);
+#152 = B_SPLINE_CURVE_WITH_KNOTS('',1,(#153,#154),.UNSPECIFIED.,.F.,.F.,
+  (2,2),(0.,1.),.PIECEWISE_BEZIER_KNOTS.);
+#153 = CARTESIAN_POINT('',(0.,-3956.92));
+#154 = CARTESIAN_POINT('',(0.,0.));
+ENDSEC;
+END-ISO-10303-21;
+"""
+        with TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "sheet_like_round_tube.stp"
+            path.write_text(step_text, encoding="utf-8")
+            result = analyze_shape(
+                None,
+                summary=ShapeSummary(
+                    size_x_mm=3.0,
+                    size_y_mm=3956.92,
+                    size_z_mm=42.3,
+                    diagonal_mm=3957.15,
+                    face_count=5,
+                    edge_count=10,
+                ),
+                file_format="STEP",
+                source_path=path,
+            )
+
+        self.assertEqual(result.profile_hint, "Круглая труба")
+        self.assertAlmostEqual(result.round_outer_diameter_mm, 42.3)
+        self.assertEqual(result.pierce_count, 2)
+        self.assertIsNone(result.sheet_analysis)
+
     def test_round_tube_loop_analysis_accepts_outer_cylinder_without_inner_radius(self) -> None:
         import cad.edge_classifier as edge_classifier
 

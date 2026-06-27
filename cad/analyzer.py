@@ -177,7 +177,13 @@ def analyze_shape(
     if solid_count == 0 and shell_count > 0:
         warnings.append("Найдены оболочки без solid-тела; толщину стенки пока нельзя определить надежно.")
 
-    if sheet_analysis is None and shape is not None:
+    step_text_analysis = (
+        analyze_step_round_tube_text(source_path)
+        if source_path is not None
+        else None
+    )
+
+    if sheet_analysis is None and shape is not None and step_text_analysis is None:
         try:
             sheet_analysis = analyze_sheet_shape(
                 shape,
@@ -305,11 +311,6 @@ def analyze_shape(
                 "проверьте результат через DEV-скрипт."
             )
 
-    step_text_analysis = (
-        analyze_step_round_tube_text(source_path)
-        if source_path is not None
-        else None
-    )
     if step_text_analysis is not None and _should_use_step_round_text_analysis(
         current_cut_length_mm=cut_length_mm,
         current_pierce_count=pierce_count,
