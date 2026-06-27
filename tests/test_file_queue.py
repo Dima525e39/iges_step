@@ -902,6 +902,62 @@ class GeometryAnalyzerTests(unittest.TestCase):
         self.assertAlmostEqual(estimate.thickness_mm, 3.0)
         self.assertEqual(estimate.method, "bbox круглой BSpline-трубы R_outer - R_inner")
 
+    def test_round_mixed_inner_wire_holes_prefer_full_contours(self) -> None:
+        faces = (
+            FaceRecord(object(), Bounds(0.0, -66.5, -66.5, 1000.0, 0.0, 66.5), False),
+            FaceRecord(object(), Bounds(0.0, 0.0, -66.5, 1000.0, 66.5, 66.5), False),
+            FaceRecord(object(), Bounds(0.0, -60.5, -60.5, 1000.0, 0.0, 60.5), False),
+            FaceRecord(object(), Bounds(0.0, 0.0, -60.5, 1000.0, 60.5, 60.5), False),
+        )
+        end_min = EdgeRecord(object(), 208.916, bounds=Bounds(0.0, -66.5, -66.5, 0.0, 0.0, 66.5))
+        end_max = EdgeRecord(object(), 208.916, bounds=Bounds(1000.0, 0.0, -66.5, 1000.0, 66.5, 66.5))
+        outer_noise = EdgeRecord(
+            object(),
+            6.0,
+            bounds=Bounds(200.0, 5.0, 60.5, 210.0, 7.0, 66.5),
+            wire_roles={"outer_wire_cut"},
+        )
+        top_a = EdgeRecord(
+            object(),
+            93.1,
+            bounds=Bounds(200.0, 16.0, 35.0, 230.0, 56.0, 66.0),
+            wire_roles={"inner_wire"},
+        )
+        top_b = EdgeRecord(
+            object(),
+            93.1,
+            bounds=Bounds(230.0, 16.0, 35.0, 260.0, 56.0, 66.0),
+            wire_roles={"inner_wire"},
+        )
+        bottom_a = EdgeRecord(
+            object(),
+            93.1,
+            bounds=Bounds(200.0, -56.0, 35.0, 230.0, -16.0, 66.0),
+            wire_roles={"inner_wire"},
+        )
+        bottom_b = EdgeRecord(
+            object(),
+            93.1,
+            bounds=Bounds(230.0, -56.0, 35.0, 260.0, -16.0, 66.0),
+            wire_roles={"inner_wire"},
+        )
+
+        analysis = _analyze_round_tube_bspline_bbox_fallback(
+            faces,
+            (end_min, end_max, outer_noise, top_a, top_b, bottom_a, bottom_b),
+            axis="X",
+            length_mm=1000.0,
+            global_bounds=Bounds(0.0, -66.5, -66.5, 1000.0, 66.5, 66.5),
+            has_outer_faces=True,
+            tolerance=0.01,
+        )
+
+        self.assertEqual(analysis.pierce_count, 4)
+        self.assertAlmostEqual(sum(edge.length_mm for edge in analysis.cut_edges), 790.232)
+        self.assertEqual(outer_noise.edge_type, "")
+        self.assertEqual(top_a.edge_type, CUT_FEATURE)
+        self.assertEqual(bottom_a.edge_type, CUT_FEATURE)
+
     def test_step_round_tube_text_analysis_keeps_slanted_end_length(self) -> None:
         from tempfile import TemporaryDirectory
 

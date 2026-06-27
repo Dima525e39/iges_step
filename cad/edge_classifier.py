@@ -341,13 +341,6 @@ def classify_cut_edges(
         )
         groups = _groups_from_edge_records(edge_records)
         cut_edges = round_loop_analysis.cut_edges
-    elif use_cut_face_analysis:
-        _suppress_legacy_cut_edges(
-            edge_records,
-            selected_cut_edges=cut_face_analysis.cut_edges,
-        )
-        groups = _groups_from_edge_records(edge_records)
-        cut_edges = cut_face_analysis.cut_edges
     elif use_round_bspline_bbox_fallback:
         _suppress_legacy_cut_edges(
             edge_records,
@@ -355,6 +348,13 @@ def classify_cut_edges(
         )
         groups = _groups_from_edge_records(edge_records)
         cut_edges = round_bspline_bbox_analysis.cut_edges
+    elif use_cut_face_analysis:
+        _suppress_legacy_cut_edges(
+            edge_records,
+            selected_cut_edges=cut_face_analysis.cut_edges,
+        )
+        groups = _groups_from_edge_records(edge_records)
+        cut_edges = cut_face_analysis.cut_edges
     elif use_round_edge_fallback:
         _suppress_legacy_cut_edges(
             edge_records,
@@ -378,17 +378,17 @@ def classify_cut_edges(
             "Круглая труба рассчитана по контурам наружной цилиндрической грани; "
             "каждый найденный EdgeLoop считается отдельной врезкой."
         )
-    elif use_cut_face_analysis:
-        pierce_count_override = cut_face_analysis.pierce_count
-        warnings.append(
-            "Длина реза рассчитана по наружным границам граней стенки реза; "
-            "внутренние кромки толщины и разбиение CAD-граней не суммируются."
-        )
     elif use_round_bspline_bbox_fallback:
         pierce_count_override = round_bspline_bbox_analysis.pierce_count
         warnings.append(
             "Круглая труба записана BSpline-поверхностями; расчет выполнен по "
             "наружному bbox-контуру трубы, внутренние кромки толщины не суммируются."
+        )
+    elif use_cut_face_analysis:
+        pierce_count_override = cut_face_analysis.pierce_count
+        warnings.append(
+            "Длина реза рассчитана по наружным границам граней стенки реза; "
+            "внутренние кромки толщины и разбиение CAD-граней не суммируются."
         )
     elif use_round_edge_fallback:
         pierce_count_override = round_edge_fallback_analysis.pierce_count
@@ -1409,9 +1409,10 @@ def _analyze_round_tube_bspline_bbox_fallback(
         cut_edges.append(edge)
 
     component_id = 3
-    feature_edges: list[EdgeRecord] = []
+    outer_only_feature_edges: list[EdgeRecord] = []
+    mixed_feature_edges: list[EdgeRecord] = []
     for edge in edge_records:
-        if not _is_round_bbox_outer_feature_edge(
+        if _is_round_bbox_outer_feature_edge(
             edge,
             axis=axis,
             length_mm=length_mm,
@@ -1420,16 +1421,53 @@ def _analyze_round_tube_bspline_bbox_fallback(
             global_bounds=global_bounds,
             tube_center=tube_center,
             tolerance=tolerance,
+            allow_inner_wire=False,
+            drop_wall_edges=False,
+            require_cross_span=False,
+            strict_outer_wire_radius=False,
         ):
+            edge.edge_type = CUT_FEATURE
+            edge.reason = "CUT_FEATURE round BSpline bbox outer contour"
+            outer_only_feature_edges.append(edge)
+        if _is_round_bbox_outer_feature_edge(
+            edge,
+            axis=axis,
+            length_mm=length_mm,
+            outer_radius=outer_radius,
+            wall_thickness=wall_thickness,
+            global_bounds=global_bounds,
+            tube_center=tube_center,
+            tolerance=tolerance,
+            allow_inner_wire=True,
+            drop_wall_edges=True,
+            require_cross_span=True,
+            strict_outer_wire_radius=True,
+        ):
+            edge.edge_type = CUT_FEATURE
+            edge.reason = "CUT_FEATURE round BSpline bbox outer contour"
+            mixed_feature_edges.append(edge)
+
+    outer_only_length = sum(edge.length_mm for edge in outer_only_feature_edges)
+    mixed_length = sum(edge.length_mm for edge in mixed_feature_edges)
+    feature_edges = (
+        mixed_feature_edges
+        if mixed_length > max(outer_only_length * 3.0, outer_only_length + outer_radius)
+        else outer_only_feature_edges
+    )
+    selected_feature_ids = {id(edge) for edge in feature_edges}
+    for edge in (*outer_only_feature_edges, *mixed_feature_edges):
+        if id(edge) in selected_feature_ids:
             continue
-        edge.edge_type = CUT_FEATURE
-        edge.reason = "CUT_FEATURE round BSpline bbox outer contour"
-        feature_edges.append(edge)
+        edge.edge_type = ""
+        edge.reason = ""
+        edge.cut_component_id = 0
+    allow_wire_axial_merge = feature_edges is outer_only_feature_edges
 
     for group in _round_bbox_feature_groups(
         tuple(feature_edges),
         axis=axis,
         tolerance=tolerance,
+        allow_wire_axial_merge=allow_wire_axial_merge,
     ):
         for edge in group:
             edge.cut_component_id = component_id
@@ -1515,7 +1553,7 @@ def _is_round_bbox_outer_end_edge(
 ) -> bool:
     if edge.bounds is None or edge.length_mm <= tolerance:
         return False
-    if not _round_bbox_wire_allows_outer_cut(edge):
+    if not _round_bbox_wire_allows_outer_cut(edge, allow_inner_wire=False):
         return False
     if _edge_end_side(
         edge,
@@ -1546,10 +1584,14 @@ def _is_round_bbox_outer_feature_edge(
     global_bounds: Bounds,
     tube_center: tuple[float, float, float],
     tolerance: float,
+    allow_inner_wire: bool,
+    drop_wall_edges: bool,
+    require_cross_span: bool,
+    strict_outer_wire_radius: bool,
 ) -> bool:
     if edge.bounds is None or edge.length_mm <= tolerance:
         return False
-    if not _round_bbox_wire_allows_outer_cut(edge):
+    if not _round_bbox_wire_allows_outer_cut(edge, allow_inner_wire=allow_inner_wire):
         return False
     axis_span = edge.bounds.sizes[AXIS_INDEX[axis]]
     if not edge.wire_roles and axis_span <= tolerance:
@@ -1557,6 +1599,18 @@ def _is_round_bbox_outer_feature_edge(
     if axis_span >= max(length_mm * 0.60, tolerance):
         return False
     cross_spans = _edge_cross_spans(edge, axis=axis)
+    if require_cross_span and max(cross_spans, default=0.0) <= max(
+        tolerance * 4.0,
+        wall_thickness * 0.05,
+    ):
+        return False
+    if (
+        drop_wall_edges
+        and
+        edge.wire_roles == {"outer_wire_cut"}
+        and edge.length_mm <= max(wall_thickness * 1.2, tolerance * 4.0)
+    ):
+        return False
     if max([axis_span, *cross_spans], default=0.0) <= max(
         wall_thickness * 0.25,
         tolerance * 4.0,
@@ -1569,21 +1623,28 @@ def _is_round_bbox_outer_feature_edge(
         tolerance=tolerance,
     ) is not None:
         return False
-    return _edge_outer_measure(
+    outer_measure = _edge_outer_measure(
         edge,
         axis=axis,
         global_bounds=global_bounds,
         tube_center=tube_center,
-    ) >= _round_bbox_outer_threshold(
+    )
+    if strict_outer_wire_radius and edge.wire_roles == {"outer_wire_cut"}:
+        return outer_measure >= outer_radius - max(tolerance * 4.0, 0.5)
+    return outer_measure >= _round_bbox_outer_threshold(
         outer_radius=outer_radius,
         wall_thickness=wall_thickness,
         tolerance=tolerance,
     )
 
 
-def _round_bbox_wire_allows_outer_cut(edge: EdgeRecord) -> bool:
+def _round_bbox_wire_allows_outer_cut(
+    edge: EdgeRecord,
+    *,
+    allow_inner_wire: bool,
+) -> bool:
     if "inner_wire" in edge.wire_roles:
-        return False
+        return allow_inner_wire
     return not edge.wire_roles or "outer_wire_cut" in edge.wire_roles
 
 
@@ -1592,6 +1653,7 @@ def _round_bbox_feature_groups(
     *,
     axis: str,
     tolerance: float,
+    allow_wire_axial_merge: bool = False,
 ) -> list[tuple[EdgeRecord, ...]]:
     remaining = list(edges)
     groups: list[tuple[EdgeRecord, ...]] = []
@@ -1608,6 +1670,7 @@ def _round_bbox_feature_groups(
                         other,
                         axis=axis,
                         tolerance=tolerance,
+                        allow_wire_axial_merge=allow_wire_axial_merge,
                     )
                     for member in group
                 ):
@@ -1624,6 +1687,7 @@ def _round_bbox_feature_edges_belong_together(
     *,
     axis: str,
     tolerance: float,
+    allow_wire_axial_merge: bool = False,
 ) -> bool:
     if first.bounds is None or second.bounds is None:
         return False
@@ -1642,7 +1706,12 @@ def _round_bbox_feature_edges_belong_together(
     second_min = second.bounds.mins[axis_index]
     second_max = second.bounds.maxes[axis_index]
     gap = max(0.0, max(first_min, second_min) - min(first_max, second_max))
-    if first.wire_roles and second.wire_roles and gap <= max(tolerance * 12.0, 1.0):
+    if (
+        allow_wire_axial_merge
+        and first.wire_roles
+        and second.wire_roles
+        and gap <= max(tolerance * 12.0, 1.0)
+    ):
         return True
 
     cross_distance = max(
@@ -1679,7 +1748,12 @@ def _edge_outer_measure(
         return 0.0
     axis_index = AXIS_INDEX[axis]
     cross_indexes = [index for index in range(3) if index != axis_index]
-    if tube_center is not None and edge.wire_roles and len(cross_indexes) == 2:
+    if (
+        tube_center is not None
+        and edge.wire_roles
+        and "inner_wire" not in edge.wire_roles
+        and len(cross_indexes) == 2
+    ):
         first_index, second_index = cross_indexes
         first_center = tube_center[first_index]
         second_center = tube_center[second_index]
