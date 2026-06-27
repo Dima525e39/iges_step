@@ -14,6 +14,7 @@ datas = [
 ]
 binaries = []
 hiddenimports = [
+    "app_build",
     "PySide6.QtCore",
     "PySide6.QtGui",
     "PySide6.QtOpenGL",

@@ -136,6 +136,78 @@ def _run_import_self_test(output_path: Path | None) -> int:
         )
         record("geometry analyzer helper: OK")
 
+        from cad.edge_classifier import (
+            Bounds,
+            EdgeRecord,
+            FaceRecord,
+            _analyze_round_tube_bspline_bbox_fallback,
+            estimate_wall_thickness,
+        )
+
+        split_faces = (
+            FaceRecord(object(), Bounds(-51.0, 0.0, -51.0, 0.0, 1000.0, 51.0), False),
+            FaceRecord(object(), Bounds(0.0, 0.0, -51.0, 51.0, 1000.0, 51.0), False),
+            FaceRecord(object(), Bounds(-48.0, 0.0, -48.0, 0.0, 1000.0, 48.0), False),
+            FaceRecord(object(), Bounds(0.0, 0.0, -48.0, 48.0, 1000.0, 48.0), False),
+        )
+        split_edges = (
+            EdgeRecord(object(), 160.221, bounds=Bounds(-51.0, 0.0, -51.0, 0.0, 0.0, 51.0), wire_roles={"outer_wire_cut"}),
+            EdgeRecord(object(), 150.796, bounds=Bounds(-48.0, 0.0, -48.0, 0.0, 0.0, 48.0), wire_roles={"inner_wire", "outer_wire_cut"}),
+            EdgeRecord(object(), 160.221, bounds=Bounds(0.0, 997.0, -51.0, 51.0, 1000.0, 0.0), wire_roles={"outer_wire_cut"}),
+            EdgeRecord(object(), 42.0, bounds=Bounds(36.0, 450.0, 36.0, 51.0, 455.0, 51.0), wire_roles={"outer_wire_cut"}),
+        )
+        split_analysis = _analyze_round_tube_bspline_bbox_fallback(
+            split_faces,
+            split_edges,
+            axis="Y",
+            length_mm=1000.0,
+            global_bounds=Bounds(-51.0, 0.0, -51.0, 51.0, 1000.0, 51.0),
+            has_outer_faces=False,
+            tolerance=0.01,
+        )
+        split_thickness = estimate_wall_thickness(
+            split_faces,
+            (),
+            axis="Y",
+            length_mm=1000.0,
+            global_bounds=Bounds(-51.0, 0.0, -51.0, 51.0, 1000.0, 51.0),
+            tolerance=0.01,
+        )
+        if (
+            round(split_analysis.outer_radius_mm * 2.0, 3) != 102.0
+            or split_analysis.pierce_count != 3
+            or round(split_thickness.thickness_mm, 3) != 3.0
+        ):
+            raise RuntimeError("round split-surface fallback self-test failed")
+
+        collector_faces = (
+            FaceRecord(object(), Bounds(0.0, -66.5, -66.5, 1000.0, 0.0, 66.5), False),
+            FaceRecord(object(), Bounds(0.0, 0.0, -66.5, 1000.0, 66.5, 66.5), False),
+            FaceRecord(object(), Bounds(0.0, -60.5, -60.5, 1000.0, 0.0, 60.5), False),
+            FaceRecord(object(), Bounds(0.0, 0.0, -60.5, 1000.0, 60.5, 60.5), False),
+        )
+        collector_edges = (
+            EdgeRecord(object(), 208.916, bounds=Bounds(0.0, -66.5, -66.5, 0.0, 0.0, 66.5)),
+            EdgeRecord(object(), 208.916, bounds=Bounds(1000.0, 0.0, -66.5, 1000.0, 66.5, 66.5)),
+            EdgeRecord(object(), 6.0, bounds=Bounds(200.0, 5.0, 60.5, 210.0, 7.0, 66.5), wire_roles={"outer_wire_cut"}),
+            EdgeRecord(object(), 93.1, bounds=Bounds(200.0, 16.0, 35.0, 230.0, 56.0, 66.0), wire_roles={"inner_wire"}),
+            EdgeRecord(object(), 93.1, bounds=Bounds(230.0, 16.0, 35.0, 260.0, 56.0, 66.0), wire_roles={"inner_wire"}),
+            EdgeRecord(object(), 93.1, bounds=Bounds(200.0, -56.0, 35.0, 230.0, -16.0, 66.0), wire_roles={"inner_wire"}),
+            EdgeRecord(object(), 93.1, bounds=Bounds(230.0, -56.0, 35.0, 260.0, -16.0, 66.0), wire_roles={"inner_wire"}),
+        )
+        collector_analysis = _analyze_round_tube_bspline_bbox_fallback(
+            collector_faces,
+            collector_edges,
+            axis="X",
+            length_mm=1000.0,
+            global_bounds=Bounds(0.0, -66.5, -66.5, 1000.0, 66.5, 66.5),
+            has_outer_faces=True,
+            tolerance=0.01,
+        )
+        if collector_analysis.pierce_count != 4:
+            raise RuntimeError("round mixed-inner fallback self-test failed")
+        record("round IGES fallback helpers: OK")
+
         detect_profile_from_dimensions(100.0, 20.0, 10.0)
         record("profile detector helper: OK")
 
