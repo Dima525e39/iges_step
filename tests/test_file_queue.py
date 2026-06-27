@@ -847,6 +847,76 @@ END-ISO-10303-21;
         self.assertEqual(analysis.pierce_count, 2)
         self.assertAlmostEqual(analysis.cut_length_mm, 271.028, places=3)
 
+    def test_step_round_tube_text_analysis_uses_long_seam_radii_for_profile(self) -> None:
+        from tempfile import TemporaryDirectory
+
+        step_text = """
+ISO-10303-21;
+DATA;
+#21 = EDGE_CURVE('',#22,#24,#26,.T.);
+#26 = SEAM_CURVE('',#27,(#31),.PCURVE_S1.);
+#31 = PCURVE('',#32,#36);
+#32 = CYLINDRICAL_SURFACE('',#33,16.75);
+#36 = DEFINITIONAL_REPRESENTATION('',(#37),#47);
+#37 = B_SPLINE_CURVE_WITH_KNOTS('',1,(#38,#39),.UNSPECIFIED.,.F.,.F.,
+  (2,2),(0.,1.),.PIECEWISE_BEZIER_KNOTS.);
+#38 = CARTESIAN_POINT('',(0.,-287.35));
+#39 = CARTESIAN_POINT('',(0.,-16.917));
+#49 = EDGE_CURVE('',#22,#22,#50,.T.);
+#50 = SURFACE_CURVE('',#51,(#56),.PCURVE_S1.);
+#56 = PCURVE('',#32,#60);
+#60 = DEFINITIONAL_REPRESENTATION('',(#61),#70);
+#61 = B_SPLINE_CURVE_WITH_KNOTS('',8,(#62,#63,#64,#65,#66,#67,#68,#69,#70),
+  .UNSPECIFIED.,.F.,.F.,(9,9),(0.,6.28318530718),.PIECEWISE_BEZIER_KNOTS.);
+#62 = CARTESIAN_POINT('',(-6.28318530718,-43.694));
+#63 = CARTESIAN_POINT('',(-5.497787143782,-43.694));
+#64 = CARTESIAN_POINT('',(-4.712388980386,-40.0));
+#65 = CARTESIAN_POINT('',(-3.92699081698,-20.0));
+#66 = CARTESIAN_POINT('',(-3.14159265362,9.859));
+#67 = CARTESIAN_POINT('',(-2.356194490184,-20.0));
+#68 = CARTESIAN_POINT('',(-1.570796326798,-40.0));
+#69 = CARTESIAN_POINT('',(-0.785398163397,-43.694));
+#70 = CARTESIAN_POINT('',(0.,-43.694));
+#82 = EDGE_CURVE('',#24,#24,#83,.T.);
+#83 = SURFACE_CURVE('',#84,(#89),.PCURVE_S1.);
+#89 = PCURVE('',#32,#90);
+#90 = DEFINITIONAL_REPRESENTATION('',(#91),#94);
+#91 = B_SPLINE_CURVE_WITH_KNOTS('',1,(#92,#93),.UNSPECIFIED.,.F.,.F.,
+  (2,2),(0.,6.28318530718),.PIECEWISE_BEZIER_KNOTS.);
+#92 = CARTESIAN_POINT('',(0.,-287.35));
+#93 = CARTESIAN_POINT('',(-6.28318530718,-287.35));
+#711 = EDGE_CURVE('',#712,#712,#714,.T.);
+#714 = SURFACE_CURVE('',#715,(#720),.PCURVE_S1.);
+#720 = PCURVE('',#490,#724);
+#724 = DEFINITIONAL_REPRESENTATION('',(#725),#730);
+#725 = B_SPLINE_CURVE_WITH_KNOTS('',1,(#726,#727),.UNSPECIFIED.,.F.,.F.,
+  (2,2),(0.,1.),.PIECEWISE_BEZIER_KNOTS.);
+#726 = CARTESIAN_POINT('',(-6.28318530718,-39.218));
+#727 = CARTESIAN_POINT('',(0.,5.383));
+#745 = EDGE_CURVE('',#712,#376,#746,.T.);
+#746 = SEAM_CURVE('',#747,(#751),.PCURVE_S1.);
+#751 = PCURVE('',#490,#755);
+#755 = DEFINITIONAL_REPRESENTATION('',(#756),#760);
+#756 = B_SPLINE_CURVE_WITH_KNOTS('',1,(#757,#758),.UNSPECIFIED.,.F.,.F.,
+  (2,2),(0.,1.),.PIECEWISE_BEZIER_KNOTS.);
+#757 = CARTESIAN_POINT('',(0.,-287.35));
+#758 = CARTESIAN_POINT('',(0.,-16.917));
+#178 = CYLINDRICAL_SURFACE('',#179,21.15);
+#490 = CYLINDRICAL_SURFACE('',#491,13.95);
+ENDSEC;
+END-ISO-10303-21;
+"""
+        with TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "tube.stp"
+            path.write_text(step_text, encoding="utf-8")
+            analysis = analyze_step_round_tube_text(path)
+
+        self.assertIsNotNone(analysis)
+        assert analysis is not None
+        self.assertAlmostEqual(analysis.outer_diameter_mm, 33.5)
+        self.assertAlmostEqual(analysis.wall_thickness_mm, 2.8)
+        self.assertEqual(analysis.pierce_count, 2)
+
     def test_round_tube_loop_analysis_accepts_outer_cylinder_without_inner_radius(self) -> None:
         import cad.edge_classifier as edge_classifier
 

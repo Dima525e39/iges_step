@@ -391,6 +391,8 @@ def _should_use_step_round_text_analysis(
         return False
     if current_cut_length_mm <= 0.0:
         return True
+    if current_pierce_count != step_pierce_count:
+        return True
     if current_cut_feature_length_mm > 0.0:
         return False
     return current_pierce_count <= step_pierce_count
