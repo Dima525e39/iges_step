@@ -17,6 +17,7 @@ from cad.edge_classifier import (
     FaceRecord,
     ThicknessFaceRecord,
     _analyze_cut_faces,
+    _analyze_round_tube_bspline_bbox_fallback,
     _analyze_round_tube_edge_fallback,
     _analyze_round_tube_outer_loops,
     _classify_edge_groups,
@@ -686,6 +687,116 @@ class GeometryAnalyzerTests(unittest.TestCase):
         self.assertEqual(end_edge.edge_type, CUT_END)
         self.assertEqual(cut_edge.edge_type, CUT_FEATURE)
         self.assertEqual(seam_edge.edge_type, "")
+
+    def test_round_bspline_tube_uses_outer_bbox_contours(self) -> None:
+        faces = (
+            FaceRecord(object(), Bounds(0.0, -133.0, -66.5, 3910.0, 0.0, 66.5), False),
+            FaceRecord(object(), Bounds(0.0, 0.0, -66.5, 3910.0, 133.0, 66.5), False),
+            FaceRecord(object(), Bounds(0.0, -121.0, -60.5, 3910.0, 0.0, 60.5), False),
+            FaceRecord(object(), Bounds(0.0, 0.0, -60.5, 3910.0, 121.0, 60.5), False),
+        )
+        edges: list[EdgeRecord] = []
+        for x in (0.0, 3910.0):
+            edges.extend(
+                [
+                    EdgeRecord(
+                        object(),
+                        208.915911,
+                        bounds=Bounds(x, -66.5, -66.5, x, 0.0, 66.5),
+                    ),
+                    EdgeRecord(
+                        object(),
+                        208.915911,
+                        bounds=Bounds(x, 0.0, -66.5, x, 66.5, 66.5),
+                    ),
+                    EdgeRecord(
+                        object(),
+                        190.066356,
+                        bounds=Bounds(x, -60.5, -60.5, x, 0.0, 60.5),
+                    ),
+                    EdgeRecord(
+                        object(),
+                        190.066356,
+                        bounds=Bounds(x, 0.0, -60.5, x, 60.5, 60.5),
+                    ),
+                ]
+            )
+
+        for index in range(38):
+            start = 405.748119 + index * 90.0
+            middle = start + 29.252677
+            end = middle + 29.254698
+            edges.extend(
+                [
+                    EdgeRecord(
+                        object(),
+                        93.112948,
+                        bounds=Bounds(start, 6.841503, 35.145982, middle, 56.453909, 66.147852),
+                    ),
+                    EdgeRecord(
+                        object(),
+                        93.113290,
+                        bounds=Bounds(middle, 6.840258, 35.144737, end, 56.455155, 66.149097),
+                    ),
+                    EdgeRecord(
+                        object(),
+                        93.399673,
+                        bounds=Bounds(start, 3.257850, 29.410999, middle, 52.870457, 60.413069),
+                    ),
+                    EdgeRecord(
+                        object(),
+                        6.762450,
+                        bounds=Bounds(middle, 3.258747, 60.412172, middle, 6.842299, 66.147056),
+                    ),
+                ]
+            )
+
+        for start in (53.497532, 3811.497532):
+            end = start + 45.004936
+            edges.extend(
+                [
+                    EdgeRecord(
+                        object(),
+                        71.219007,
+                        bounds=Bounds(start, -0.002468, -66.502468, end, 22.503209, -62.575217),
+                    ),
+                    EdgeRecord(
+                        object(),
+                        71.219359,
+                        bounds=Bounds(start, -22.502281, -66.502055, end, 0.002055, -62.575815),
+                    ),
+                    EdgeRecord(
+                        object(),
+                        71.338471,
+                        bounds=Bounds(start, -22.501082, -60.500485, end, 0.000485, -56.159760),
+                    ),
+                ]
+            )
+
+        analysis = _analyze_round_tube_bspline_bbox_fallback(
+            faces,
+            edges,
+            axis="X",
+            length_mm=3910.0,
+            global_bounds=Bounds(0.0, -66.5, -66.5, 3910.0, 66.5, 66.5),
+            has_outer_faces=False,
+            tolerance=0.01,
+        )
+        estimate = estimate_wall_thickness(
+            faces,
+            edges,
+            axis="X",
+            length_mm=3910.0,
+            global_bounds=Bounds(0.0, -66.5, -66.5, 3910.0, 66.5, 66.5),
+            tolerance=0.01,
+        )
+
+        self.assertEqual(analysis.pierce_count, 42)
+        self.assertEqual(len(analysis.cut_edges), 84)
+        self.assertAlmostEqual(analysis.outer_radius_mm * 2.0, 133.0)
+        self.assertAlmostEqual(sum(edge.length_mm for edge in analysis.cut_edges), 8197.137420)
+        self.assertAlmostEqual(estimate.thickness_mm, 6.0)
+        self.assertEqual(estimate.method, "bbox круглой BSpline-трубы R_outer - R_inner")
 
     def test_round_tube_loop_analysis_accepts_outer_cylinder_without_inner_radius(self) -> None:
         import cad.edge_classifier as edge_classifier

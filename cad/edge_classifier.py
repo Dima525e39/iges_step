@@ -111,6 +111,7 @@ class CutFaceAnalysis:
     cut_edges: tuple[EdgeRecord, ...] = ()
     cut_faces: tuple[ThicknessFaceRecord, ...] = ()
     pierce_count: int = 0
+    outer_radius_mm: float = 0.0
 
 
 @dataclass(slots=True)
@@ -312,6 +313,15 @@ def classify_cut_edges(
         global_bounds=global_bounds,
         tolerance=tolerance,
     )
+    round_bspline_bbox_analysis = _analyze_round_tube_bspline_bbox_fallback(
+        face_records,
+        edge_records,
+        axis=axis,
+        length_mm=length_mm,
+        global_bounds=global_bounds,
+        has_outer_faces=outer_face_count > 0,
+        tolerance=tolerance,
+    )
     round_edge_fallback_analysis = _analyze_round_tube_edge_fallback(
         edge_records,
         axis=axis,
@@ -322,6 +332,7 @@ def classify_cut_edges(
     )
     use_round_loop_analysis = bool(round_loop_analysis.cut_edges)
     use_cut_face_analysis = bool(cut_face_analysis.cut_edges)
+    use_round_bspline_bbox_fallback = bool(round_bspline_bbox_analysis.cut_edges)
     use_round_edge_fallback = bool(round_edge_fallback_analysis.cut_edges)
     if use_round_loop_analysis:
         _suppress_legacy_cut_edges(
@@ -337,6 +348,13 @@ def classify_cut_edges(
         )
         groups = _groups_from_edge_records(edge_records)
         cut_edges = cut_face_analysis.cut_edges
+    elif use_round_bspline_bbox_fallback:
+        _suppress_legacy_cut_edges(
+            edge_records,
+            selected_cut_edges=round_bspline_bbox_analysis.cut_edges,
+        )
+        groups = _groups_from_edge_records(edge_records)
+        cut_edges = round_bspline_bbox_analysis.cut_edges
     elif use_round_edge_fallback:
         _suppress_legacy_cut_edges(
             edge_records,
@@ -365,6 +383,12 @@ def classify_cut_edges(
         warnings.append(
             "Длина реза рассчитана по наружным границам граней стенки реза; "
             "внутренние кромки толщины и разбиение CAD-граней не суммируются."
+        )
+    elif use_round_bspline_bbox_fallback:
+        pierce_count_override = round_bspline_bbox_analysis.pierce_count
+        warnings.append(
+            "Круглая труба записана BSpline-поверхностями; расчет выполнен по "
+            "наружному bbox-контуру трубы, внутренние кромки толщины не суммируются."
         )
     elif use_round_edge_fallback:
         pierce_count_override = round_edge_fallback_analysis.pierce_count
@@ -434,7 +458,11 @@ def classify_cut_edges(
         global_bounds=global_bounds,
         tolerance=tolerance,
         round_outer_diameter_mm=(
-            round_loop_analysis.outer_radius_mm * 2.0 if use_round_loop_analysis else 0.0
+            round_loop_analysis.outer_radius_mm * 2.0
+            if use_round_loop_analysis
+            else round_bspline_bbox_analysis.outer_radius_mm * 2.0
+            if use_round_bspline_bbox_fallback
+            else 0.0
         ),
         face_records=tuple(face_records),
     )
@@ -708,6 +736,15 @@ def _estimate_round_tube_thickness(
     )
     distinct = _distinct_sorted(radii, tolerance=tolerance)
     if len(distinct) < 2:
+        bbox_estimate = _estimate_round_tube_thickness_from_bounds(
+            face_records,
+            axis=axis,
+            length_mm=length_mm,
+            global_bounds=global_bounds,
+            tolerance=tolerance,
+        )
+        if bbox_estimate.thickness_mm > tolerance:
+            return bbox_estimate
         return ThicknessEstimate()
 
     outer_radius = distinct[-1]
@@ -725,6 +762,35 @@ def _estimate_round_tube_thickness(
         method="цилиндры R_outer - R_inner",
         confidence=confidence,
         warnings=warnings,
+    )
+
+
+def _estimate_round_tube_thickness_from_bounds(
+    face_records: tuple[FaceRecord, ...],
+    *,
+    axis: str,
+    length_mm: float,
+    global_bounds: Bounds,
+    tolerance: float,
+) -> ThicknessEstimate:
+    profile = _round_tube_bbox_profile(
+        face_records,
+        axis=axis,
+        length_mm=length_mm,
+        global_bounds=global_bounds,
+        tolerance=tolerance,
+    )
+    if profile is None:
+        return ThicknessEstimate()
+
+    outer_radius, inner_radius = profile
+    thickness = outer_radius - inner_radius
+    if thickness <= tolerance:
+        return ThicknessEstimate()
+    return ThicknessEstimate(
+        thickness_mm=thickness,
+        method="bbox круглой BSpline-трубы R_outer - R_inner",
+        confidence="средняя",
     )
 
 
@@ -1292,6 +1358,317 @@ def _analyze_round_tube_edge_fallback(
         edge.cut_component_id = component_ids.get(index, 0)
     pierce_count = len({component for component in component_ids.values() if component > 0})
     return CutFaceAnalysis(cut_edges=tuple(selected), pierce_count=pierce_count)
+
+
+def _analyze_round_tube_bspline_bbox_fallback(
+    face_records: tuple[FaceRecord, ...] | list[FaceRecord],
+    edge_records: tuple[EdgeRecord, ...] | list[EdgeRecord],
+    *,
+    axis: str,
+    length_mm: float,
+    global_bounds: Bounds,
+    has_outer_faces: bool,
+    tolerance: float,
+) -> CutFaceAnalysis:
+    if has_outer_faces:
+        return CutFaceAnalysis()
+    profile = _round_tube_bbox_profile(
+        tuple(face_records),
+        axis=axis,
+        length_mm=length_mm,
+        global_bounds=global_bounds,
+        tolerance=tolerance,
+    )
+    if profile is None:
+        return CutFaceAnalysis()
+
+    outer_radius, inner_radius = profile
+    wall_thickness = outer_radius - inner_radius
+    if wall_thickness <= tolerance:
+        return CutFaceAnalysis()
+
+    cut_edges: list[EdgeRecord] = []
+    component_id = 1
+    for edge in edge_records:
+        if not _is_round_bbox_outer_end_edge(
+            edge,
+            axis=axis,
+            outer_radius=outer_radius,
+            wall_thickness=wall_thickness,
+            global_bounds=global_bounds,
+            tolerance=tolerance,
+        ):
+            continue
+        edge.edge_type = CUT_END
+        edge.reason = "CUT_END round BSpline bbox outer tube end"
+        edge.cut_component_id = 1 if _edge_end_side(
+            edge,
+            axis=axis,
+            global_bounds=global_bounds,
+            tolerance=tolerance,
+        ) == "min" else 2
+        cut_edges.append(edge)
+
+    component_id = 3
+    feature_edges: list[EdgeRecord] = []
+    for edge in edge_records:
+        if not _is_round_bbox_outer_feature_edge(
+            edge,
+            axis=axis,
+            length_mm=length_mm,
+            outer_radius=outer_radius,
+            wall_thickness=wall_thickness,
+            global_bounds=global_bounds,
+            tolerance=tolerance,
+        ):
+            continue
+        edge.edge_type = CUT_FEATURE
+        edge.reason = "CUT_FEATURE round BSpline bbox outer contour"
+        feature_edges.append(edge)
+
+    for group in _round_bbox_feature_groups(
+        tuple(feature_edges),
+        axis=axis,
+        tolerance=tolerance,
+    ):
+        for edge in group:
+            edge.cut_component_id = component_id
+            cut_edges.append(edge)
+        component_id += 1
+
+    if not cut_edges:
+        return CutFaceAnalysis()
+    pierce_count = max(0, component_id - 1)
+    return CutFaceAnalysis(
+        cut_edges=tuple(cut_edges),
+        pierce_count=pierce_count,
+        outer_radius_mm=outer_radius,
+    )
+
+
+def _round_tube_bbox_profile(
+    face_records: tuple[FaceRecord, ...],
+    *,
+    axis: str,
+    length_mm: float,
+    global_bounds: Bounds,
+    tolerance: float,
+) -> tuple[float, float] | None:
+    if not _global_bounds_looks_round_tube(
+        axis=axis,
+        global_bounds=global_bounds,
+        tolerance=tolerance,
+    ):
+        return None
+
+    axis_index = AXIS_INDEX[axis]
+    cross_indexes = [index for index in range(3) if index != axis_index]
+    diameters: list[float] = []
+    for face in face_records:
+        if face.bounds.sizes[axis_index] < max(length_mm * 0.65, tolerance):
+            continue
+        cross_sizes = [face.bounds.sizes[index] for index in cross_indexes]
+        cross_min = min(cross_sizes)
+        cross_max = max(cross_sizes)
+        if cross_min <= tolerance or cross_min / cross_max < 0.75:
+            continue
+        diameters.append((cross_min + cross_max) / 2.0)
+
+    distinct = _distinct_sorted(diameters, tolerance=max(tolerance * 5.0, 0.2))
+    if len(distinct) < 2:
+        return None
+
+    outer_diameter = distinct[-1]
+    inner_diameter = distinct[-2]
+    expected_outer_radius = _expected_round_outer_radius(
+        axis=axis,
+        global_bounds=global_bounds,
+        tolerance=tolerance,
+    )
+    if expected_outer_radius <= tolerance:
+        return None
+    expected_outer_diameter = expected_outer_radius * 2.0
+    if abs(outer_diameter - expected_outer_diameter) > max(expected_outer_diameter * 0.08, 1.0):
+        return None
+    if outer_diameter <= inner_diameter + tolerance:
+        return None
+    return outer_diameter / 2.0, inner_diameter / 2.0
+
+
+def _is_round_bbox_outer_end_edge(
+    edge: EdgeRecord,
+    *,
+    axis: str,
+    outer_radius: float,
+    wall_thickness: float,
+    global_bounds: Bounds,
+    tolerance: float,
+) -> bool:
+    if edge.bounds is None or edge.length_mm <= tolerance:
+        return False
+    if _edge_end_side(
+        edge,
+        axis=axis,
+        global_bounds=global_bounds,
+        tolerance=tolerance,
+    ) is None:
+        return False
+    cross_spans = _edge_cross_spans(edge, axis=axis)
+    if max(cross_spans, default=0.0) < outer_radius * 1.4:
+        return False
+    return _edge_outer_measure(
+        edge,
+        axis=axis,
+        global_bounds=global_bounds,
+    ) >= _round_bbox_outer_threshold(
+        outer_radius=outer_radius,
+        wall_thickness=wall_thickness,
+        tolerance=tolerance,
+    )
+
+
+def _is_round_bbox_outer_feature_edge(
+    edge: EdgeRecord,
+    *,
+    axis: str,
+    length_mm: float,
+    outer_radius: float,
+    wall_thickness: float,
+    global_bounds: Bounds,
+    tolerance: float,
+) -> bool:
+    if edge.bounds is None or edge.length_mm <= tolerance:
+        return False
+    axis_span = edge.bounds.sizes[AXIS_INDEX[axis]]
+    if axis_span <= tolerance:
+        return False
+    if axis_span >= max(length_mm * 0.60, tolerance):
+        return False
+    cross_spans = _edge_cross_spans(edge, axis=axis)
+    if max(cross_spans, default=0.0) <= max(wall_thickness * 1.2, tolerance * 4.0):
+        return False
+    if _edge_end_side(
+        edge,
+        axis=axis,
+        global_bounds=global_bounds,
+        tolerance=tolerance,
+    ) is not None:
+        return False
+    return _edge_outer_measure(
+        edge,
+        axis=axis,
+        global_bounds=global_bounds,
+    ) >= _round_bbox_outer_threshold(
+        outer_radius=outer_radius,
+        wall_thickness=wall_thickness,
+        tolerance=tolerance,
+    )
+
+
+def _round_bbox_feature_groups(
+    edges: tuple[EdgeRecord, ...],
+    *,
+    axis: str,
+    tolerance: float,
+) -> list[tuple[EdgeRecord, ...]]:
+    remaining = list(edges)
+    groups: list[tuple[EdgeRecord, ...]] = []
+    while remaining:
+        current = remaining.pop(0)
+        group = [current]
+        changed = True
+        while changed:
+            changed = False
+            for other in tuple(remaining):
+                if any(
+                    _round_bbox_feature_edges_belong_together(
+                        member,
+                        other,
+                        axis=axis,
+                        tolerance=tolerance,
+                    )
+                    for member in group
+                ):
+                    group.append(other)
+                    remaining.remove(other)
+                    changed = True
+        groups.append(tuple(group))
+    return groups
+
+
+def _round_bbox_feature_edges_belong_together(
+    first: EdgeRecord,
+    second: EdgeRecord,
+    *,
+    axis: str,
+    tolerance: float,
+) -> bool:
+    if first.bounds is None or second.bounds is None:
+        return False
+    axis_index = AXIS_INDEX[axis]
+    cross_indexes = [index for index in range(3) if index != axis_index]
+    first_center = [
+        (first.bounds.mins[index] + first.bounds.maxes[index]) / 2.0
+        for index in cross_indexes
+    ]
+    second_center = [
+        (second.bounds.mins[index] + second.bounds.maxes[index]) / 2.0
+        for index in cross_indexes
+    ]
+    cross_distance = max(
+        abs(a - b) for a, b in zip(first_center, second_center, strict=False)
+    )
+    cross_span = max(
+        max(first.bounds.sizes[index], second.bounds.sizes[index])
+        for index in cross_indexes
+    )
+    if cross_distance > max(cross_span * 1.10, tolerance * 8.0, 1.0):
+        return False
+    first_min = first.bounds.mins[axis_index]
+    first_max = first.bounds.maxes[axis_index]
+    second_min = second.bounds.mins[axis_index]
+    second_max = second.bounds.maxes[axis_index]
+    gap = max(0.0, max(first_min, second_min) - min(first_max, second_max))
+    return gap <= max(tolerance * 12.0, 1.0)
+
+
+def _edge_cross_spans(edge: EdgeRecord, *, axis: str) -> list[float]:
+    if edge.bounds is None:
+        return []
+    axis_index = AXIS_INDEX[axis]
+    return [
+        edge.bounds.sizes[index]
+        for index in range(3)
+        if index != axis_index
+    ]
+
+
+def _edge_outer_measure(
+    edge: EdgeRecord,
+    *,
+    axis: str,
+    global_bounds: Bounds,
+) -> float:
+    if edge.bounds is None:
+        return 0.0
+    axis_index = AXIS_INDEX[axis]
+    values: list[float] = []
+    for index in range(3):
+        if index == axis_index:
+            continue
+        center = (global_bounds.mins[index] + global_bounds.maxes[index]) / 2.0
+        values.append(abs(edge.bounds.mins[index] - center))
+        values.append(abs(edge.bounds.maxes[index] - center))
+    return max(values, default=0.0)
+
+
+def _round_bbox_outer_threshold(
+    *,
+    outer_radius: float,
+    wall_thickness: float,
+    tolerance: float,
+) -> float:
+    return outer_radius - max(wall_thickness * 0.8, tolerance * 2.0, 0.5)
 
 
 def _global_bounds_looks_round_tube(
