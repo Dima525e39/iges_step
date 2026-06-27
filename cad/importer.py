@@ -105,6 +105,38 @@ class CadImporter:
 
     @staticmethod
     def _read_iges(path: Path):
+        last_error: CadImportError | None = None
+        candidates = [path]
+        temp_dir_context = None
+
+        if _iges_has_non_ascii_bytes(path):
+            temp_dir_context = TemporaryDirectory(prefix="tubecut_iges_ascii_")
+            sanitized_path = Path(temp_dir_context.name) / "input.igs"
+            _copy_iges_ascii_sanitized(path, sanitized_path)
+            candidates.append(sanitized_path)
+
+        try:
+            for candidate in candidates:
+                try:
+                    shape = CadImporter._read_iges_once(candidate)
+                except CadImportError as exc:
+                    last_error = exc
+                    continue
+                if not _shape_is_null(shape):
+                    return _sew_iges_shape(shape)
+                last_error = CadImportError("OpenCascade вернул пустую IGES-модель.")
+        finally:
+            if temp_dir_context is not None:
+                temp_dir_context.cleanup()
+
+        if len(candidates) > 1:
+            raise CadImportError(
+                "IGES-файл не удалось прочитать даже после очистки не-ASCII заголовка."
+            ) from last_error
+        raise last_error or CadImportError("IGES-файл не удалось прочитать.")
+
+    @staticmethod
+    def _read_iges_once(path: Path):
         from OCC.Core.IFSelect import IFSelect_RetDone
         from OCC.Core.IGESControl import IGESControl_Reader
         from OCC.Core.Interface import Interface_Static
@@ -116,7 +148,7 @@ class CadImporter:
             raise CadImportError("IGES-файл не удалось прочитать.")
 
         reader.TransferRoots()
-        return _sew_iges_shape(reader.OneShape())
+        return reader.OneShape()
 
 
 def _sew_iges_shape(shape: object) -> object:
@@ -147,3 +179,31 @@ def _sew_iges_shape(shape: object) -> object:
     except Exception:
         return shape
     return sewed
+
+
+def _iges_has_non_ascii_bytes(path: Path) -> bool:
+    try:
+        return any(byte > 0x7F for byte in path.read_bytes())
+    except OSError:
+        return False
+
+
+def _copy_iges_ascii_sanitized(source: Path, target: Path) -> None:
+    target.write_bytes(_sanitize_iges_ascii_bytes(source.read_bytes()))
+
+
+def _sanitize_iges_ascii_bytes(data: bytes) -> bytes:
+    table = bytes.maketrans(
+        bytes(range(256)),
+        bytes(byte if byte <= 0x7F else ord("_") for byte in range(256)),
+    )
+    return data.translate(table)
+
+
+def _shape_is_null(shape: object) -> bool:
+    if shape is None:
+        return True
+    try:
+        return bool(shape.IsNull())
+    except Exception:
+        return False

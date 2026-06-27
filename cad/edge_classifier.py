@@ -1134,8 +1134,8 @@ def _bounds_end_side(
     global_length = max(0.0, global_max - global_min)
     bound_center = (bound_min + bound_max) / 2.0
     axial_span = max(0.0, bound_max - bound_min)
-    end_tolerance = max(tolerance * 8.0, min(2.0, global_length * 0.003), 0.10)
-    end_span_tolerance = max(end_tolerance * 6.0, min(8.0, global_length * 0.01))
+    end_tolerance = max(tolerance * 8.0, min(4.0, global_length * 0.004), 0.10)
+    end_span_tolerance = max(end_tolerance * 6.0, min(16.0, global_length * 0.01))
     near_min = min(abs(bound_min - global_min), abs(bound_max - global_min)) <= end_tolerance
     near_max = min(abs(bound_min - global_max), abs(bound_max - global_max)) <= end_tolerance
     if near_min and axial_span <= end_span_tolerance and abs(bound_center - global_min) <= abs(bound_center - global_max):
@@ -1370,8 +1370,6 @@ def _analyze_round_tube_bspline_bbox_fallback(
     has_outer_faces: bool,
     tolerance: float,
 ) -> CutFaceAnalysis:
-    if has_outer_faces:
-        return CutFaceAnalysis()
     profile = _round_tube_bbox_profile(
         tuple(face_records),
         axis=axis,
@@ -1465,9 +1463,16 @@ def _round_tube_bbox_profile(
         cross_sizes = [face.bounds.sizes[index] for index in cross_indexes]
         cross_min = min(cross_sizes)
         cross_max = max(cross_sizes)
-        if cross_min <= tolerance or cross_min / cross_max < 0.75:
+        if cross_min <= tolerance or cross_max <= tolerance:
             continue
-        candidates.append(((cross_min + cross_max) / 2.0, face))
+        cross_ratio = cross_min / cross_max
+        if cross_ratio >= 0.75:
+            diameter = (cross_min + cross_max) / 2.0
+        elif cross_ratio >= 0.35:
+            diameter = cross_max
+        else:
+            continue
+        candidates.append((diameter, face))
 
     diameters = [diameter for diameter, _face in candidates]
     distinct = _distinct_sorted(diameters, tolerance=max(tolerance * 5.0, 0.2))
@@ -1510,15 +1515,14 @@ def _is_round_bbox_outer_end_edge(
 ) -> bool:
     if edge.bounds is None or edge.length_mm <= tolerance:
         return False
+    if not _round_bbox_wire_allows_outer_cut(edge):
+        return False
     if _edge_end_side(
         edge,
         axis=axis,
         global_bounds=global_bounds,
         tolerance=tolerance,
     ) is None:
-        return False
-    cross_spans = _edge_cross_spans(edge, axis=axis)
-    if max(cross_spans, default=0.0) < outer_radius * 1.4:
         return False
     return _edge_outer_measure(
         edge,
@@ -1545,13 +1549,18 @@ def _is_round_bbox_outer_feature_edge(
 ) -> bool:
     if edge.bounds is None or edge.length_mm <= tolerance:
         return False
+    if not _round_bbox_wire_allows_outer_cut(edge):
+        return False
     axis_span = edge.bounds.sizes[AXIS_INDEX[axis]]
-    if axis_span <= tolerance:
+    if not edge.wire_roles and axis_span <= tolerance:
         return False
     if axis_span >= max(length_mm * 0.60, tolerance):
         return False
     cross_spans = _edge_cross_spans(edge, axis=axis)
-    if max(cross_spans, default=0.0) <= max(wall_thickness * 1.2, tolerance * 4.0):
+    if max([axis_span, *cross_spans], default=0.0) <= max(
+        wall_thickness * 0.25,
+        tolerance * 4.0,
+    ):
         return False
     if _edge_end_side(
         edge,
@@ -1570,6 +1579,12 @@ def _is_round_bbox_outer_feature_edge(
         wall_thickness=wall_thickness,
         tolerance=tolerance,
     )
+
+
+def _round_bbox_wire_allows_outer_cut(edge: EdgeRecord) -> bool:
+    if "inner_wire" in edge.wire_roles:
+        return False
+    return not edge.wire_roles or "outer_wire_cut" in edge.wire_roles
 
 
 def _round_bbox_feature_groups(
@@ -1622,6 +1637,14 @@ def _round_bbox_feature_edges_belong_together(
         (second.bounds.mins[index] + second.bounds.maxes[index]) / 2.0
         for index in cross_indexes
     ]
+    first_min = first.bounds.mins[axis_index]
+    first_max = first.bounds.maxes[axis_index]
+    second_min = second.bounds.mins[axis_index]
+    second_max = second.bounds.maxes[axis_index]
+    gap = max(0.0, max(first_min, second_min) - min(first_max, second_max))
+    if first.wire_roles and second.wire_roles and gap <= max(tolerance * 12.0, 1.0):
+        return True
+
     cross_distance = max(
         abs(a - b) for a, b in zip(first_center, second_center, strict=False)
     )
@@ -1631,11 +1654,6 @@ def _round_bbox_feature_edges_belong_together(
     )
     if cross_distance > max(cross_span * 1.10, tolerance * 8.0, 1.0):
         return False
-    first_min = first.bounds.mins[axis_index]
-    first_max = first.bounds.maxes[axis_index]
-    second_min = second.bounds.mins[axis_index]
-    second_max = second.bounds.maxes[axis_index]
-    gap = max(0.0, max(first_min, second_min) - min(first_max, second_max))
     return gap <= max(tolerance * 12.0, 1.0)
 
 
@@ -1660,6 +1678,29 @@ def _edge_outer_measure(
     if edge.bounds is None:
         return 0.0
     axis_index = AXIS_INDEX[axis]
+    cross_indexes = [index for index in range(3) if index != axis_index]
+    if tube_center is not None and edge.wire_roles and len(cross_indexes) == 2:
+        first_index, second_index = cross_indexes
+        first_center = tube_center[first_index]
+        second_center = tube_center[second_index]
+        distances: list[float] = []
+        for first_value in (
+            edge.bounds.mins[first_index],
+            edge.bounds.maxes[first_index],
+        ):
+            for second_value in (
+                edge.bounds.mins[second_index],
+                edge.bounds.maxes[second_index],
+            ):
+                distances.append(
+                    (
+                        (first_value - first_center) ** 2
+                        + (second_value - second_center) ** 2
+                    )
+                    ** 0.5
+                )
+        return max(distances, default=0.0)
+
     values: list[float] = []
     for index in range(3):
         if index == axis_index:
@@ -2050,18 +2091,12 @@ def _edge_end_side(
 ) -> str | None:
     if edge.bounds is None:
         return None
-
-    axis_index = AXIS_INDEX[axis]
-    edge_min = edge.bounds.mins[axis_index]
-    edge_max = edge.bounds.maxes[axis_index]
-    global_min = global_bounds.mins[axis_index]
-    global_max = global_bounds.maxes[axis_index]
-    end_tolerance = max(tolerance * 4.0, 0.05)
-    if abs(edge_min - global_min) <= end_tolerance and abs(edge_max - global_min) <= end_tolerance:
-        return "min"
-    if abs(edge_min - global_max) <= end_tolerance and abs(edge_max - global_max) <= end_tolerance:
-        return "max"
-    return None
+    return _bounds_end_side(
+        edge.bounds,
+        axis=axis,
+        global_bounds=global_bounds,
+        tolerance=tolerance,
+    )
 
 
 def _thickness_faces_touch(

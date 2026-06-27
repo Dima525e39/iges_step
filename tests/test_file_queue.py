@@ -33,7 +33,12 @@ from cad.edge_classifier import (
     estimate_wall_thickness,
 )
 from cad.debug_edges import write_debug_edges_csv
-from cad.importer import CadImportError, CadImporter, _sew_iges_shape
+from cad.importer import (
+    CadImportError,
+    CadImporter,
+    _sanitize_iges_ascii_bytes,
+    _sew_iges_shape,
+)
 from cad.pierce_counter import _count_components_from_pairs
 from cad.profile_detector import detect_profile_from_dimensions
 from cad.shape_summary import ShapeSummary
@@ -180,6 +185,18 @@ class CadImporterTests(unittest.TestCase):
 
             with CadImporter._path_for_opencascade(source) as read_path:
                 self.assertEqual(read_path, source)
+
+    def test_iges_ascii_sanitizer_preserves_fixed_width_records(self) -> None:
+        content = b"1H,,9H\xf1\xf2.1_1\xf8\xf2.,15HSolidWorks 2023"
+        raw = content.ljust(72) + b"G      1\r\n"
+
+        sanitized = _sanitize_iges_ascii_bytes(raw)
+        first_line = sanitized.rstrip(b"\r\n")
+
+        self.assertEqual(len(first_line), 80)
+        self.assertTrue(sanitized.isascii())
+        self.assertEqual(chr(first_line[72]), "G")
+        self.assertIn(b"__.1_1__", sanitized)
 
     def test_sew_iges_shape_returns_shape_unchanged_when_sewing_unavailable(self) -> None:
         # When OpenCascade (or its sewing API) is not importable, healing must
@@ -798,6 +815,91 @@ class GeometryAnalyzerTests(unittest.TestCase):
         self.assertAlmostEqual(analysis.outer_radius_mm * 2.0, 133.0)
         self.assertAlmostEqual(sum(edge.length_mm for edge in analysis.cut_edges), 8197.137420)
         self.assertAlmostEqual(estimate.thickness_mm, 6.0)
+        self.assertEqual(estimate.method, "bbox круглой BSpline-трубы R_outer - R_inner")
+
+        edges_with_outer_flag = tuple(
+            EdgeRecord(object(), edge.length_mm, bounds=edge.bounds)
+            for edge in edges
+        )
+        analysis_with_outer_flag = _analyze_round_tube_bspline_bbox_fallback(
+            faces,
+            edges_with_outer_flag,
+            axis="X",
+            length_mm=3910.0,
+            global_bounds=Bounds(0.0, -133.0, -66.5, 3910.0, 133.0, 72.821),
+            has_outer_faces=True,
+            tolerance=0.01,
+        )
+
+        self.assertEqual(analysis_with_outer_flag.pierce_count, 42)
+        self.assertAlmostEqual(analysis_with_outer_flag.outer_radius_mm * 2.0, 133.0)
+        self.assertAlmostEqual(
+            sum(edge.length_mm for edge in analysis_with_outer_flag.cut_edges),
+            8197.137420,
+        )
+
+    def test_round_split_surface_tube_uses_half_cylinder_bbox(self) -> None:
+        faces = (
+            FaceRecord(object(), Bounds(-51.0, 0.0, -51.0, 0.0, 1000.0, 51.0), False),
+            FaceRecord(object(), Bounds(0.0, 0.0, -51.0, 51.0, 1000.0, 51.0), False),
+            FaceRecord(object(), Bounds(-48.0, 0.0, -48.0, 0.0, 1000.0, 48.0), False),
+            FaceRecord(object(), Bounds(0.0, 0.0, -48.0, 48.0, 1000.0, 48.0), False),
+        )
+        min_end_outer = EdgeRecord(
+            object(),
+            160.221,
+            bounds=Bounds(-51.0, 0.0, -51.0, 0.0, 0.0, 51.0),
+            wire_roles={"outer_wire_cut"},
+        )
+        min_end_inner = EdgeRecord(
+            object(),
+            150.796,
+            bounds=Bounds(-48.0, 0.0, -48.0, 0.0, 0.0, 48.0),
+            wire_roles={"inner_wire", "outer_wire_cut"},
+        )
+        max_end_outer = EdgeRecord(
+            object(),
+            160.221,
+            bounds=Bounds(0.0, 997.0, -51.0, 51.0, 1000.0, 0.0),
+            wire_roles={"outer_wire_cut"},
+        )
+        feature_outer = EdgeRecord(
+            object(),
+            42.0,
+            bounds=Bounds(36.0, 450.0, 36.0, 51.0, 455.0, 51.0),
+            wire_roles={"outer_wire_cut"},
+        )
+        longitudinal = EdgeRecord(
+            object(),
+            1000.0,
+            bounds=Bounds(51.0, 0.0, 0.0, 51.0, 1000.0, 0.0),
+        )
+
+        analysis = _analyze_round_tube_bspline_bbox_fallback(
+            faces,
+            (min_end_outer, min_end_inner, max_end_outer, feature_outer, longitudinal),
+            axis="Y",
+            length_mm=1000.0,
+            global_bounds=Bounds(-51.0, 0.0, -51.0, 51.0, 1000.0, 51.0),
+            has_outer_faces=False,
+            tolerance=0.01,
+        )
+        estimate = estimate_wall_thickness(
+            faces,
+            (),
+            axis="Y",
+            length_mm=1000.0,
+            global_bounds=Bounds(-51.0, 0.0, -51.0, 51.0, 1000.0, 51.0),
+            tolerance=0.01,
+        )
+
+        self.assertEqual(analysis.cut_edges, (min_end_outer, max_end_outer, feature_outer))
+        self.assertEqual(analysis.pierce_count, 3)
+        self.assertAlmostEqual(analysis.outer_radius_mm * 2.0, 102.0)
+        self.assertEqual(min_end_outer.edge_type, CUT_END)
+        self.assertEqual(max_end_outer.edge_type, CUT_END)
+        self.assertEqual(feature_outer.edge_type, CUT_FEATURE)
+        self.assertAlmostEqual(estimate.thickness_mm, 3.0)
         self.assertEqual(estimate.method, "bbox круглой BSpline-трубы R_outer - R_inner")
 
     def test_step_round_tube_text_analysis_keeps_slanted_end_length(self) -> None:
