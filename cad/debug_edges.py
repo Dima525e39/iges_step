@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 from pathlib import Path
 
+from app_info import APP_VERSION, APP_BUILD_COMMIT, CALC_CORE_REVISION
 from cad.edge_classifier import (
     CALCULATED_CUT_TYPES,
     CUT_END,
@@ -38,6 +39,9 @@ def write_debug_edges_csv(
         writer.writerow(
             (
                 "source_file",
+                "app_version",
+                "build_commit",
+                "calc_core",
                 "edge_index",
                 "length_mm",
                 "edge_type",
@@ -56,6 +60,9 @@ def write_debug_edges_csv(
             writer.writerow(
                 (
                     source_file,
+                    APP_VERSION,
+                    APP_BUILD_COMMIT,
+                    CALC_CORE_REVISION,
                     index,
                     f"{edge.length_mm:.6f}",
                     edge.edge_type,

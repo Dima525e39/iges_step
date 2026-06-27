@@ -29,7 +29,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app_info import APP_NAME, APP_VERSION
+from app_info import APP_NAME, APP_VERSION, build_label
 from cad.analyzer import GeometryAnalysisResult, analyze_shape
 from cad.shape_summary import ShapeSummary
 from core.file_job import (
@@ -95,7 +95,7 @@ class MainWindow(QMainWindow):
         self.geometry_debug_dialog: GeometryDebugDialog | None = None
 
         self.setAcceptDrops(True)
-        self.setWindowTitle(f"{APP_NAME} {APP_VERSION}")
+        self.setWindowTitle(f"{APP_NAME} {build_label()}")
         self.resize(1360, 820)
 
         self.drop_root = QFrame()
@@ -108,14 +108,14 @@ class MainWindow(QMainWindow):
         self._connect_signals()
         self._refresh_jobs()
 
-        self.statusBar().showMessage(f"{APP_NAME} {APP_VERSION}")
+        self.statusBar().showMessage(f"{APP_NAME} {build_label()}")
 
     def _build_ui(self) -> None:
         root_layout = QVBoxLayout(self.drop_root)
         root_layout.setContentsMargins(10, 10, 10, 10)
         root_layout.setSpacing(8)
 
-        header = QLabel(f"{APP_NAME} {APP_VERSION}")
+        header = QLabel(f"{APP_NAME} {build_label()}")
         header.setObjectName("HeaderLabel")
         root_layout.addWidget(header)
 

@@ -1513,9 +1513,18 @@ END-ISO-10303-21;
             write_debug_edges_csv(classification, target, source_file="part.step")
             content = target.read_text(encoding="utf-8-sig")
 
-        self.assertIn("source_file,edge_index,length_mm,edge_type,included_in_cut", content)
-        self.assertIn("part.step,1,30.000000,CUT_FEATURE,yes", content)
-        self.assertIn("part.step,2,1000.000000,IGNORED_LONGITUDINAL,no", content)
+        self.assertIn(
+            "source_file,app_version,build_commit,calc_core,edge_index,length_mm,edge_type,included_in_cut",
+            content,
+        )
+        self.assertIn(
+            "part.step,v0.5.4,local,round-iges-fallback-v2,1,30.000000,CUT_FEATURE,yes",
+            content,
+        )
+        self.assertIn(
+            "part.step,v0.5.4,local,round-iges-fallback-v2,2,1000.000000,IGNORED_LONGITUDINAL,no",
+            content,
+        )
 
     def test_thickness_face_candidate_requires_outer_touch(self) -> None:
         outer_face = FaceRecord(

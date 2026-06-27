@@ -7,6 +7,9 @@ set ENV_NAME=TubeCutCalculator
 
 echo Building %APP_NAME% %APP_VERSION%
 
+set BUILD_COMMIT=unknown
+for /f "usebackq delims=" %%i in (`git rev-parse --short^=12 HEAD 2^>nul`) do set BUILD_COMMIT=%%i
+
 where conda >nul 2>nul
 if errorlevel 1 (
     echo Conda or Miniforge is required for %APP_NAME% %APP_VERSION%.
@@ -32,7 +35,7 @@ if errorlevel 1 (
     if errorlevel 1 exit /b 1
 )
 
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$date=(Get-Date).ToString('yyyy-MM-dd HH:mm:ss'); Set-Content -Encoding UTF8 version.txt @('TubeCutCalculator v0.5.4','Build date: ' + $date,'Description: Adds first true-shape/NFP-like nesting engine with contour collision checks, arbitrary angle step rotation, and real-contour area efficiency.')"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$date=(Get-Date).ToString('yyyy-MM-dd HH:mm:ss'); Set-Content -Encoding UTF8 app_build.py @('from __future__ import annotations','','APP_BUILD_COMMIT = ''%BUILD_COMMIT%''','APP_BUILD_DATE = ''' + $date + '''','CALC_CORE_REVISION = ''round-iges-fallback-v2'''); Set-Content -Encoding UTF8 version.txt @('TubeCutCalculator v0.5.4','Build date: ' + $date,'Build commit: %BUILD_COMMIT%','Calc core: round-iges-fallback-v2','Description: Adds round IGES fallback diagnostics and build identity.')"
 if errorlevel 1 exit /b 1
 
 call %CONDA_CMD% run -n %ENV_NAME% python -m PyInstaller --noconfirm --clean TubeCutCalculator.spec

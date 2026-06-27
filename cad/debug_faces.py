@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 from pathlib import Path
 
+from app_info import APP_VERSION, APP_BUILD_COMMIT, CALC_CORE_REVISION
 from cad.edge_classifier import EdgeClassificationResult, FaceRecord
 
 
@@ -19,6 +20,9 @@ def write_debug_faces_csv(
         writer.writerow(
             [
                 "face_index",
+                "app_version",
+                "build_commit",
+                "calc_core",
                 "surface_type",
                 "radius_mm",
                 "is_outer_longitudinal",
@@ -40,6 +44,9 @@ def write_debug_faces_csv(
             writer.writerow(
                 [
                     index,
+                    APP_VERSION,
+                    APP_BUILD_COMMIT,
+                    CALC_CORE_REVISION,
                     surface_type,
                     f"{radius:.6f}" if radius is not None else "",
                     "yes" if face.is_outer_longitudinal else "no",
