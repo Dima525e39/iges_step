@@ -9,6 +9,7 @@ from PyInstaller.utils.hooks import collect_all
 
 
 datas = [
+    ("app_build.py", "."),
     ("version.txt", "."),
     ("settings/default_settings.json", "settings"),
 ]

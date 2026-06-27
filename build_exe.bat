@@ -7,7 +7,7 @@ set ENV_NAME=TubeCutCalculator
 
 echo Building %APP_NAME% %APP_VERSION%
 
-set BUILD_COMMIT=unknown
+set BUILD_COMMIT=manual-build
 for /f "usebackq delims=" %%i in (`git rev-parse --short^=12 HEAD 2^>nul`) do set BUILD_COMMIT=%%i
 
 where conda >nul 2>nul
@@ -36,6 +36,12 @@ if errorlevel 1 (
 )
 
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$date=(Get-Date).ToString('yyyy-MM-dd HH:mm:ss'); Set-Content -Encoding UTF8 app_build.py @('from __future__ import annotations','','APP_BUILD_COMMIT = ''%BUILD_COMMIT%''','APP_BUILD_DATE = ''' + $date + '''','CALC_CORE_REVISION = ''round-iges-fallback-v2'''); Set-Content -Encoding UTF8 version.txt @('TubeCutCalculator v0.5.5','Build date: ' + $date,'Build commit: %BUILD_COMMIT%','Calc core: round-iges-fallback-v2','Description: Verifies packaged build identity and improves round IGES diagnostics.')"
+if errorlevel 1 exit /b 1
+
+echo Generated build identity:
+type app_build.py
+
+call %CONDA_CMD% run -n %ENV_NAME% python -c "from app_info import APP_BUILD_COMMIT, CALC_CORE_REVISION; print('Build identity:', APP_BUILD_COMMIT, CALC_CORE_REVISION); raise SystemExit(1 if APP_BUILD_COMMIT in ('', 'local', 'unknown') else 0)"
 if errorlevel 1 exit /b 1
 
 call %CONDA_CMD% run -n %ENV_NAME% python -m PyInstaller --noconfirm --clean TubeCutCalculator.spec
