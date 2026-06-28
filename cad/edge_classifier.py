@@ -2728,7 +2728,7 @@ def _summary_axis_size(summary: ShapeSummary, axis: str) -> float:
 
 def _tolerance_from_summary(summary: ShapeSummary) -> float:
     largest = max(float(summary.size_x_mm), float(summary.size_y_mm), float(summary.size_z_mm), 1.0)
-    return max(0.01, largest * 0.001)
+    return max(0.01, min(largest * 0.001, 0.1))
 
 
 def _median(values: tuple[float, ...]) -> float:

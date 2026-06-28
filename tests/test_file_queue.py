@@ -29,6 +29,7 @@ from cad.edge_classifier import (
     _is_cut_edge_candidate,
     _is_outer_longitudinal_face,
     _is_thickness_face_candidate,
+    _tolerance_from_summary,
     WireRecord,
     estimate_wall_thickness,
 )
@@ -587,6 +588,42 @@ class GeometryAnalyzerTests(unittest.TestCase):
         self.assertEqual(end_edge.edge_type, CUT_END)
         self.assertEqual(longitudinal_edge.edge_type, IGNORED_LONGITUDINAL)
         self.assertEqual(profile_edge.edge_type, IGNORED_PROFILE)
+
+    def test_summary_tolerance_keeps_small_spline_segments(self) -> None:
+        summary = ShapeSummary(
+            diagonal_mm=3912.72,
+            size_x_mm=103.2,
+            size_y_mm=103.2,
+            size_z_mm=3910.0,
+            face_count=283,
+            edge_count=4229,
+        )
+        tolerance = _tolerance_from_summary(summary)
+        outer_face = FaceRecord(
+            face=object(),
+            bounds=Bounds(0.0, 50.0, 0.0, 103.2, 50.0, 3910.0),
+            is_outer_longitudinal=True,
+        )
+        short_spline_segment = EdgeRecord(
+            edge=object(),
+            length_mm=0.490877,
+            bounds=Bounds(20.0, 50.0, 100.0, 20.4, 50.0, 100.2),
+            faces=[outer_face],
+            wire_roles={"inner_wire"},
+        )
+
+        groups = _classify_edge_groups(
+            (short_spline_segment,),
+            axis="Z",
+            length_mm=3910.0,
+            global_bounds=Bounds(0.0, -50.0, 0.0, 103.2, 50.0, 3910.0),
+            has_outer_faces=True,
+            tolerance=tolerance,
+        )
+
+        self.assertLess(tolerance, short_spline_segment.length_mm)
+        self.assertEqual(groups.calculated_cut_edges, (short_spline_segment,))
+        self.assertEqual(short_spline_segment.edge_type, CUT_FEATURE)
 
     def test_plane_radius_transition_is_ignored_separately(self) -> None:
         first_outer = FaceRecord(
