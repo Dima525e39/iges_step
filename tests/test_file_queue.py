@@ -2093,6 +2093,42 @@ END-ISO-10303-21;
             2,
         )
 
+    def test_cut_edge_components_merge_coplanar_iges_fragments(self) -> None:
+        first_fragment = EdgeRecord(
+            edge=object(),
+            length_mm=9.36,
+            bounds=Bounds(0.0, 20.0, 100.0, 0.0, 29.3, 100.1),
+            edge_type=CUT_FEATURE,
+        )
+        second_fragment = EdgeRecord(
+            edge=object(),
+            length_mm=9.34,
+            bounds=Bounds(0.0, 20.1, 102.9, 0.0, 28.9, 105.8),
+            edge_type=CUT_FEATURE,
+        )
+        third_fragment = EdgeRecord(
+            edge=object(),
+            length_mm=3.15,
+            bounds=Bounds(0.0, 19.4, 108.0, 0.0, 21.5, 110.3),
+            edge_type=CUT_FEATURE,
+        )
+        separate_cut = EdgeRecord(
+            edge=object(),
+            length_mm=46.0,
+            bounds=Bounds(0.0, 0.0, 240.0, 0.0, 20.0, 243.0),
+            edge_type=CUT_FEATURE,
+        )
+
+        self.assertEqual(
+            _count_cut_edge_components(
+                (first_fragment, second_fragment, third_fragment, separate_cut),
+                axis="Z",
+                global_bounds=Bounds(0.0, -50.0, 0.0, 100.0, 50.0, 1000.0),
+                tolerance=0.1,
+            ),
+            2,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

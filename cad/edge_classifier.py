@@ -397,12 +397,15 @@ def classify_cut_edges(
             "использован fallback по замкнутым/поперечным B-Rep ребрам."
         )
     else:
-        pierce_count_override = _count_cut_edge_components(
+        component_ids = _cut_edge_component_ids(
             cut_edges,
             axis=axis,
             global_bounds=global_bounds,
             tolerance=tolerance,
         )
+        for index, edge in enumerate(cut_edges):
+            edge.cut_component_id = component_ids.get(index, 0)
+        pierce_count_override = len(set(component_ids.values()))
         warnings.append(
             "Грани стенки реза не найдены; использован fallback по классификации B-Rep ребер."
         )
@@ -2129,6 +2132,15 @@ def _cut_edge_component_ids(
             if _edge_endpoints_touch(left, right, tolerance=tolerance):
                 union(left_index, right_index)
 
+    if global_bounds is not None:
+        _merge_coplanar_fragment_components(
+            edges,
+            find=find,
+            union=union,
+            global_bounds=global_bounds,
+            tolerance=tolerance,
+        )
+
     root_to_component: dict[int, int] = {}
     component_ids: dict[int, int] = {}
     for index in range(len(edges)):
@@ -2137,6 +2149,110 @@ def _cut_edge_component_ids(
             root_to_component[root] = len(root_to_component) + 1
         component_ids[index] = root_to_component[root]
     return component_ids
+
+
+def _merge_coplanar_fragment_components(
+    edges: tuple[EdgeRecord, ...],
+    *,
+    find,
+    union,
+    global_bounds: Bounds,
+    tolerance: float,
+) -> None:
+    root_bounds: dict[int, Bounds] = {}
+    for index, edge in enumerate(edges):
+        if edge.bounds is None:
+            continue
+        root = find(index)
+        existing = root_bounds.get(root)
+        root_bounds[root] = (
+            edge.bounds if existing is None else _combine_bounds(existing, edge.bounds)
+        )
+
+    roots = tuple(root_bounds)
+    boundary_tolerance = max(tolerance * 2.0, 0.2)
+    merge_tolerance = _coplanar_fragment_merge_tolerance(global_bounds, tolerance)
+    for left_position, left_root in enumerate(roots):
+        left_bounds = root_bounds[left_root]
+        left_side = _bounds_global_side(
+            left_bounds,
+            global_bounds=global_bounds,
+            tolerance=boundary_tolerance,
+        )
+        if left_side is None:
+            continue
+        for right_root in roots[left_position + 1 :]:
+            if find(left_root) == find(right_root):
+                continue
+            right_bounds = root_bounds[right_root]
+            if left_side != _bounds_global_side(
+                right_bounds,
+                global_bounds=global_bounds,
+                tolerance=boundary_tolerance,
+            ):
+                continue
+            if (
+                _coplanar_bounds_gap(
+                    left_bounds,
+                    right_bounds,
+                    plane_axis=left_side[0],
+                )
+                <= merge_tolerance
+            ):
+                union(left_root, right_root)
+
+
+def _combine_bounds(first: Bounds, second: Bounds) -> Bounds:
+    return Bounds(
+        min(first.xmin, second.xmin),
+        min(first.ymin, second.ymin),
+        min(first.zmin, second.zmin),
+        max(first.xmax, second.xmax),
+        max(first.ymax, second.ymax),
+        max(first.zmax, second.zmax),
+    )
+
+
+def _bounds_global_side(
+    bounds: Bounds,
+    *,
+    global_bounds: Bounds,
+    tolerance: float,
+) -> tuple[int, str] | None:
+    for index in range(3):
+        if (
+            abs(bounds.mins[index] - global_bounds.mins[index]) <= tolerance
+            and abs(bounds.maxes[index] - global_bounds.mins[index]) <= tolerance
+        ):
+            return index, "min"
+        if (
+            abs(bounds.mins[index] - global_bounds.maxes[index]) <= tolerance
+            and abs(bounds.maxes[index] - global_bounds.maxes[index]) <= tolerance
+        ):
+            return index, "max"
+    return None
+
+
+def _coplanar_fragment_merge_tolerance(global_bounds: Bounds, tolerance: float) -> float:
+    meaningful_sizes = tuple(size for size in global_bounds.sizes if size > tolerance)
+    cross_size = min(meaningful_sizes) if meaningful_sizes else 1.0
+    return max(tolerance * 4.0, min(3.0, cross_size * 0.03))
+
+
+def _coplanar_bounds_gap(
+    first: Bounds,
+    second: Bounds,
+    *,
+    plane_axis: int,
+) -> float:
+    axes = [0, 1, 2]
+    axes.remove(plane_axis)
+    gaps: list[float] = []
+    for index in axes:
+        min_value = max(first.mins[index], second.mins[index])
+        max_value = min(first.maxes[index], second.maxes[index])
+        gaps.append(max(0.0, min_value - max_value))
+    return (gaps[0] ** 2 + gaps[1] ** 2) ** 0.5
 
 
 def _same_tube_end_side(
