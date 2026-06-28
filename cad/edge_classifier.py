@@ -680,7 +680,9 @@ def estimate_wall_thickness(
         global_bounds=global_bounds,
         tolerance=tolerance,
     )
-    if round_estimate.thickness_mm > tolerance and round_estimate.confidence == "высокая":
+    round_tolerance = _round_bbox_analysis_tolerance(tolerance)
+    round_has_thickness = round_estimate.thickness_mm > round_tolerance
+    if round_has_thickness and round_estimate.confidence == "высокая":
         return round_estimate
 
     flat_estimate = _estimate_flat_wall_thickness(
@@ -693,7 +695,7 @@ def estimate_wall_thickness(
     if flat_estimate.thickness_mm > tolerance:
         return flat_estimate
 
-    if round_estimate.thickness_mm > tolerance:
+    if round_has_thickness:
         return round_estimate
 
     return ThicknessEstimate(
@@ -709,10 +711,11 @@ def _estimate_round_tube_thickness(
     global_bounds: Bounds,
     tolerance: float,
 ) -> ThicknessEstimate:
+    round_tolerance = _round_bbox_analysis_tolerance(tolerance)
     expected_outer_radius = _expected_round_outer_radius(
         axis=axis,
         global_bounds=global_bounds,
-        tolerance=tolerance,
+        tolerance=round_tolerance,
     )
     radii = sorted(
         radius
@@ -729,28 +732,28 @@ def _estimate_round_tube_thickness(
             _normalize_cylinder_radius(
                 radius,
                 expected_outer_radius=expected_outer_radius,
-                tolerance=tolerance,
+                tolerance=round_tolerance,
             ),
         )
-        if radius is not None and radius > tolerance
+        if radius is not None and radius > round_tolerance
     )
-    distinct = _distinct_sorted(radii, tolerance=tolerance)
+    distinct = _distinct_sorted(radii, tolerance=round_tolerance)
     if len(distinct) < 2:
         bbox_estimate = _estimate_round_tube_thickness_from_bounds(
             face_records,
             axis=axis,
             length_mm=length_mm,
             global_bounds=global_bounds,
-            tolerance=tolerance,
+            tolerance=round_tolerance,
         )
-        if bbox_estimate.thickness_mm > tolerance:
+        if bbox_estimate.thickness_mm > round_tolerance:
             return bbox_estimate
         return ThicknessEstimate()
 
     outer_radius = distinct[-1]
     inner_radius = distinct[-2]
     thickness = outer_radius - inner_radius
-    if thickness <= tolerance:
+    if thickness <= round_tolerance:
         return ThicknessEstimate()
 
     confidence = "высокая" if len(distinct) == 2 else "средняя"
@@ -773,25 +776,30 @@ def _estimate_round_tube_thickness_from_bounds(
     global_bounds: Bounds,
     tolerance: float,
 ) -> ThicknessEstimate:
+    round_tolerance = _round_bbox_analysis_tolerance(tolerance)
     profile = _round_tube_bbox_profile(
         face_records,
         axis=axis,
         length_mm=length_mm,
         global_bounds=global_bounds,
-        tolerance=tolerance,
+        tolerance=round_tolerance,
     )
     if profile is None:
         return ThicknessEstimate()
 
     outer_radius, inner_radius, _tube_center = profile
     thickness = outer_radius - inner_radius
-    if thickness <= tolerance:
+    if thickness <= round_tolerance:
         return ThicknessEstimate()
     return ThicknessEstimate(
         thickness_mm=thickness,
         method="bbox круглой BSpline-трубы R_outer - R_inner",
         confidence="средняя",
     )
+
+
+def _round_bbox_analysis_tolerance(tolerance: float) -> float:
+    return max(0.01, min(float(tolerance), 0.1))
 
 
 def _estimate_flat_wall_thickness(
@@ -1370,19 +1378,20 @@ def _analyze_round_tube_bspline_bbox_fallback(
     has_outer_faces: bool,
     tolerance: float,
 ) -> CutFaceAnalysis:
+    round_tolerance = _round_bbox_analysis_tolerance(tolerance)
     profile = _round_tube_bbox_profile(
         tuple(face_records),
         axis=axis,
         length_mm=length_mm,
         global_bounds=global_bounds,
-        tolerance=tolerance,
+        tolerance=round_tolerance,
     )
     if profile is None:
         return CutFaceAnalysis()
 
     outer_radius, inner_radius, tube_center = profile
     wall_thickness = outer_radius - inner_radius
-    if wall_thickness <= tolerance:
+    if wall_thickness <= round_tolerance:
         return CutFaceAnalysis()
 
     cut_edges: list[EdgeRecord] = []
@@ -1395,7 +1404,7 @@ def _analyze_round_tube_bspline_bbox_fallback(
             wall_thickness=wall_thickness,
             global_bounds=global_bounds,
             tube_center=tube_center,
-            tolerance=tolerance,
+            tolerance=round_tolerance,
         ):
             continue
         edge.edge_type = CUT_END
@@ -1404,7 +1413,7 @@ def _analyze_round_tube_bspline_bbox_fallback(
             edge,
             axis=axis,
             global_bounds=global_bounds,
-            tolerance=tolerance,
+            tolerance=round_tolerance,
         ) == "min" else 2
         cut_edges.append(edge)
 
@@ -1420,7 +1429,7 @@ def _analyze_round_tube_bspline_bbox_fallback(
             wall_thickness=wall_thickness,
             global_bounds=global_bounds,
             tube_center=tube_center,
-            tolerance=tolerance,
+            tolerance=round_tolerance,
             allow_inner_wire=False,
             drop_wall_edges=False,
             require_cross_span=False,
@@ -1437,7 +1446,7 @@ def _analyze_round_tube_bspline_bbox_fallback(
             wall_thickness=wall_thickness,
             global_bounds=global_bounds,
             tube_center=tube_center,
-            tolerance=tolerance,
+            tolerance=round_tolerance,
             allow_inner_wire=True,
             drop_wall_edges=True,
             require_cross_span=True,
@@ -1466,7 +1475,7 @@ def _analyze_round_tube_bspline_bbox_fallback(
     for group in _round_bbox_feature_groups(
         tuple(feature_edges),
         axis=axis,
-        tolerance=tolerance,
+        tolerance=round_tolerance,
         allow_wire_axial_merge=allow_wire_axial_merge,
     ):
         for edge in group:

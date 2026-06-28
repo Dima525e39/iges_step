@@ -634,6 +634,30 @@ class GeometryAnalyzerTests(unittest.TestCase):
         self.assertEqual(estimate.thickness_mm, 2.5)
         self.assertEqual(estimate.method, "цилиндры R_outer - R_inner")
 
+        long_tube_faces = (
+            FaceRecord(
+                FakeCylinderFace(17.5),
+                Bounds(-35.0, -33.65, 0.0, 35.0, 33.65, 3910.0),
+                True,
+            ),
+            FaceRecord(
+                FakeCylinderFace(15.0),
+                Bounds(-30.0, -28.65, 0.0, 30.0, 28.65, 3910.0),
+                False,
+            ),
+        )
+        long_tube_estimate = estimate_wall_thickness(
+            long_tube_faces,
+            (),
+            axis="Z",
+            length_mm=3910.0,
+            global_bounds=Bounds(-35.0, -33.65, 0.0, 35.0, 33.65, 3910.0),
+            tolerance=3.91,
+        )
+
+        self.assertEqual(long_tube_estimate.thickness_mm, 2.5)
+        self.assertEqual(long_tube_estimate.method, "цилиндры R_outer - R_inner")
+
     def test_round_tube_uses_outer_cylindrical_face_loops(self) -> None:
         import cad.edge_classifier as edge_classifier
 
@@ -833,6 +857,37 @@ class GeometryAnalyzerTests(unittest.TestCase):
 
         self.assertEqual(analysis_with_outer_flag.pierce_count, 42)
         self.assertAlmostEqual(analysis_with_outer_flag.outer_radius_mm * 2.0, 133.0)
+
+        production_tolerance = 3910.0 * 0.001
+        high_tolerance_edges = tuple(
+            EdgeRecord(object(), edge.length_mm, bounds=edge.bounds)
+            for edge in edges
+        )
+        high_tolerance_analysis = _analyze_round_tube_bspline_bbox_fallback(
+            faces,
+            high_tolerance_edges,
+            axis="X",
+            length_mm=3910.0,
+            global_bounds=Bounds(0.0, -133.0, -66.5, 3910.0, 133.0, 72.821),
+            has_outer_faces=False,
+            tolerance=production_tolerance,
+        )
+        high_tolerance_estimate = estimate_wall_thickness(
+            faces,
+            high_tolerance_edges,
+            axis="X",
+            length_mm=3910.0,
+            global_bounds=Bounds(0.0, -133.0, -66.5, 3910.0, 133.0, 72.821),
+            tolerance=production_tolerance,
+        )
+
+        self.assertEqual(high_tolerance_analysis.pierce_count, 42)
+        self.assertEqual(len(high_tolerance_analysis.cut_edges), 84)
+        self.assertAlmostEqual(
+            sum(edge.length_mm for edge in high_tolerance_analysis.cut_edges),
+            8197.137420,
+        )
+        self.assertAlmostEqual(high_tolerance_estimate.thickness_mm, 6.0)
         self.assertAlmostEqual(
             sum(edge.length_mm for edge in analysis_with_outer_flag.cut_edges),
             8197.137420,
