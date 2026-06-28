@@ -67,6 +67,7 @@ class CadImportWorker(QObject):
                         manual_wall_thickness_mm=self.manual_wall_thickness_mm,
                         debug_edges_path=debug_edges_path,
                         source_path=source_path,
+                        import_warnings=result.warnings,
                     )
             except Exception as exc:
                 message = str(exc).strip() or exc.__class__.__name__

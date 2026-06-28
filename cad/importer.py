@@ -15,6 +15,24 @@ from cad.supported_formats import is_supported_cad_file
 # planes of one multi-plane cut belong together. The tolerance is the maximum
 # gap that is still treated as a coincident edge.
 IGES_SEW_TOLERANCE_MM = 0.01
+IGES_BREP_ENTITY_TYPES = frozenset({186, 502, 504, 508, 510, 514})
+IGES_SURFACE_ENTITY_TYPES = frozenset(
+    {
+        114,
+        118,
+        120,
+        122,
+        128,
+        140,
+        143,
+        144,
+        190,
+        192,
+        194,
+        196,
+        198,
+    }
+)
 
 
 class CadImportError(RuntimeError):
@@ -26,6 +44,37 @@ class CadImportResult:
     path: Path
     shape: Any
     file_format: str
+    warnings: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class IgesEntitySummary:
+    entity_count: int
+    entity_counts: dict[int, int]
+
+    @property
+    def has_brep_topology(self) -> bool:
+        return any(
+            self.entity_counts.get(entity_type, 0)
+            for entity_type in IGES_BREP_ENTITY_TYPES
+        )
+
+    @property
+    def has_surfaces(self) -> bool:
+        return any(
+            self.entity_counts.get(entity_type, 0)
+            for entity_type in IGES_SURFACE_ENTITY_TYPES
+        )
+
+    @property
+    def is_surface_only_model(self) -> bool:
+        return self.has_surfaces and not self.has_brep_topology
+
+    def warning(self) -> str:
+        return (
+            "IGES содержит поверхности без B-Rep solid/shell; "
+            "автоматическая сшивка пропущена, используется анализ поверхностей."
+        )
 
 
 class CadImporter:
@@ -38,9 +87,12 @@ class CadImporter:
         if not is_supported_cad_file(file_path):
             raise CadImportError(f"Формат файла не поддерживается: {file_path.suffix}")
 
+        file_format = self.detect_format(file_path)
+        iges_summary = scan_iges_entity_summary(file_path) if file_format == "IGES" else None
+
         try:
             with self._path_for_opencascade(file_path) as read_path:
-                shape = self._read_shape(read_path)
+                shape = self._read_shape(read_path, iges_summary=iges_summary)
         except ImportError as exc:
             raise CadImportError(
                 "pythonocc-core недоступен в этом запуске. "
@@ -55,7 +107,12 @@ class CadImporter:
         return CadImportResult(
             path=file_path,
             shape=shape,
-            file_format=self.detect_format(file_path),
+            file_format=file_format,
+            warnings=(
+                (iges_summary.warning(),)
+                if iges_summary is not None and iges_summary.is_surface_only_model
+                else ()
+            ),
         )
 
     @staticmethod
@@ -67,12 +124,12 @@ class CadImporter:
             return "IGES"
         return "UNKNOWN"
 
-    def _read_shape(self, path: Path):
+    def _read_shape(self, path: Path, *, iges_summary: IgesEntitySummary | None = None):
         file_format = self.detect_format(path)
         if file_format == "STEP":
             return self._read_step(path)
         if file_format == "IGES":
-            return self._read_iges(path)
+            return self._read_iges(path, iges_summary=iges_summary)
         raise CadImportError(f"Формат файла не поддерживается: {path.suffix}")
 
     @staticmethod
@@ -104,7 +161,7 @@ class CadImporter:
         return reader.OneShape()
 
     @staticmethod
-    def _read_iges(path: Path):
+    def _read_iges(path: Path, *, iges_summary: IgesEntitySummary | None = None):
         last_error: CadImportError | None = None
         candidates = [path]
         temp_dir_context = None
@@ -123,6 +180,8 @@ class CadImporter:
                     last_error = exc
                     continue
                 if not _shape_is_null(shape):
+                    if iges_summary is not None and iges_summary.is_surface_only_model:
+                        return shape
                     return _sew_iges_shape(shape)
                 last_error = CadImportError("OpenCascade вернул пустую IGES-модель.")
         finally:
@@ -179,6 +238,36 @@ def _sew_iges_shape(shape: object) -> object:
     except Exception:
         return shape
     return sewed
+
+
+def scan_iges_entity_summary(path: str | Path) -> IgesEntitySummary:
+    """Read the IGES directory section without OpenCascade.
+
+    This is intentionally lightweight: it only inspects fixed-width D-section
+    records and counts entity types. Surface-only IGES files can then skip
+    expensive automatic sewing.
+    """
+    entity_counts: dict[int, int] = {}
+    try:
+        lines = Path(path).read_bytes().splitlines()
+    except OSError:
+        return IgesEntitySummary(entity_count=0, entity_counts={})
+
+    directory_lines = [
+        line
+        for line in lines
+        if len(line) >= 73 and line[72:73] == b"D"
+    ]
+    for line in directory_lines[::2]:
+        try:
+            entity_type = int(line[:8].strip())
+        except ValueError:
+            continue
+        entity_counts[entity_type] = entity_counts.get(entity_type, 0) + 1
+    return IgesEntitySummary(
+        entity_count=sum(entity_counts.values()),
+        entity_counts=entity_counts,
+    )
 
 
 def _iges_has_non_ascii_bytes(path: Path) -> bool:

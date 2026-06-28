@@ -36,8 +36,10 @@ from cad.debug_edges import write_debug_edges_csv
 from cad.importer import (
     CadImportError,
     CadImporter,
+    IgesEntitySummary,
     _sanitize_iges_ascii_bytes,
     _sew_iges_shape,
+    scan_iges_entity_summary,
 )
 from cad.pierce_counter import _count_components_from_pairs
 from cad.profile_detector import detect_profile_from_dimensions
@@ -197,6 +199,93 @@ class CadImporterTests(unittest.TestCase):
         self.assertTrue(sanitized.isascii())
         self.assertEqual(chr(first_line[72]), "G")
         self.assertIn(b"__.1_1__", sanitized)
+
+    def test_iges_prescan_detects_surface_only_model(self) -> None:
+        from tempfile import TemporaryDirectory
+
+        def directory_line(entity_type: int, seq: int) -> bytes:
+            prefix = (
+                f"{entity_type:8d}{1:8d}{0:8d}{0:8d}{0:8d}"
+                f"{'':32}"
+            )
+            return f"{prefix}D{seq:7d}\r\n".encode("ascii")
+
+        with TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "surface.igs"
+            path.write_bytes(
+                b"surface".ljust(72) + b"S      1\r\n"
+                + directory_line(144, 1)
+                + directory_line(144, 2)
+                + directory_line(128, 3)
+                + directory_line(128, 4)
+                + b"S      1G      1D      4P      0T      1\r\n"
+            )
+
+            summary = scan_iges_entity_summary(path)
+
+        self.assertEqual(summary.entity_count, 2)
+        self.assertTrue(summary.is_surface_only_model)
+        self.assertFalse(summary.has_brep_topology)
+
+    def test_iges_prescan_detects_brep_topology(self) -> None:
+        from tempfile import TemporaryDirectory
+
+        def directory_line(entity_type: int, seq: int) -> bytes:
+            prefix = (
+                f"{entity_type:8d}{1:8d}{0:8d}{0:8d}{0:8d}"
+                f"{'':32}"
+            )
+            return f"{prefix}D{seq:7d}\r\n".encode("ascii")
+
+        with TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "solid.igs"
+            path.write_bytes(
+                b"solid".ljust(72) + b"S      1\r\n"
+                + directory_line(186, 1)
+                + directory_line(186, 2)
+                + directory_line(144, 3)
+                + directory_line(144, 4)
+                + b"S      1G      1D      4P      0T      1\r\n"
+            )
+
+            summary = scan_iges_entity_summary(path)
+
+        self.assertEqual(summary.entity_count, 2)
+        self.assertTrue(summary.has_brep_topology)
+        self.assertFalse(summary.is_surface_only_model)
+
+    def test_surface_only_iges_skips_automatic_sewing(self) -> None:
+        import cad.importer as importer_module
+        from tempfile import TemporaryDirectory
+
+        class FakeShape:
+            def IsNull(self) -> bool:
+                return False
+
+        original_read_once = CadImporter._read_iges_once
+        original_sew = importer_module._sew_iges_shape
+        sew_calls: list[object] = []
+        shape = FakeShape()
+
+        try:
+            CadImporter._read_iges_once = staticmethod(lambda path: shape)
+            importer_module._sew_iges_shape = lambda candidate: sew_calls.append(candidate) or candidate
+            with TemporaryDirectory() as temp_dir:
+                path = Path(temp_dir) / "surface.igs"
+                path.write_text("", encoding="ascii")
+                result = CadImporter._read_iges(
+                    path,
+                    iges_summary=IgesEntitySummary(
+                        entity_count=1,
+                        entity_counts={144: 1},
+                    ),
+                )
+        finally:
+            CadImporter._read_iges_once = original_read_once
+            importer_module._sew_iges_shape = original_sew
+
+        self.assertIs(result, shape)
+        self.assertEqual(sew_calls, [])
 
     def test_sew_iges_shape_returns_shape_unchanged_when_sewing_unavailable(self) -> None:
         # When OpenCascade (or its sewing API) is not importable, healing must

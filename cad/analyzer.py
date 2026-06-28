@@ -107,6 +107,7 @@ class TubeAnalyzer:
         return self.analyze_shape(
             import_result.shape,
             file_format=import_result.file_format,
+            import_warnings=import_result.warnings,
         )
 
     def analyze_shape(
@@ -115,8 +116,14 @@ class TubeAnalyzer:
         *,
         summary: ShapeSummary | None = None,
         file_format: str = "CAD",
+        import_warnings: tuple[str, ...] = (),
     ) -> GeometryAnalysisResult:
-        return analyze_shape(shape, summary=summary, file_format=file_format)
+        return analyze_shape(
+            shape,
+            summary=summary,
+            file_format=file_format,
+            import_warnings=import_warnings,
+        )
 
 
 def analyze_shape(
@@ -128,6 +135,7 @@ def analyze_shape(
     debug_edges_path: str | Path | None = None,
     source_path: str | Path | None = None,
     sheet_analysis: SheetAnalysisResult | None = None,
+    import_warnings: tuple[str, ...] = (),
 ) -> GeometryAnalysisResult:
     if summary is None:
         if shape is None:
@@ -145,7 +153,7 @@ def analyze_shape(
     width_mm = cross_sizes[0] if cross_sizes else 0.0
     height_mm = cross_sizes[1] if len(cross_sizes) > 1 else 0.0
 
-    warnings: list[str] = []
+    warnings: list[str] = list(import_warnings)
     solid_count = 0
     shell_count = 0
     if shape is not None:
