@@ -191,7 +191,22 @@ def analyze_shape(
         else None
     )
 
-    if sheet_analysis is None and shape is not None and step_text_analysis is None:
+    skip_sheet_for_surface_iges = _is_surface_only_iges_import(
+        file_format=file_format,
+        import_warnings=import_warnings,
+    )
+    if skip_sheet_for_surface_iges:
+        warnings.append(
+            "Листовой анализ пропущен для surface-only IGES; "
+            "используется трубный анализ поверхностей."
+        )
+
+    if (
+        sheet_analysis is None
+        and shape is not None
+        and step_text_analysis is None
+        and not skip_sheet_for_surface_iges
+    ):
         try:
             sheet_analysis = analyze_sheet_shape(
                 shape,
@@ -387,6 +402,16 @@ def _count_topology_safely(shape: object, top_abs_name: str, warnings: list[str]
     except Exception as exc:
         warnings.append(f"Не удалось посчитать {top_abs_name}: {exc}")
         return 0
+
+
+def _is_surface_only_iges_import(
+    *,
+    file_format: str,
+    import_warnings: tuple[str, ...],
+) -> bool:
+    if file_format.upper() != "IGES":
+        return False
+    return any("поверхности без B-Rep" in warning for warning in import_warnings)
 
 
 def _should_use_step_round_text_analysis(

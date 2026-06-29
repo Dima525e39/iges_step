@@ -424,6 +424,61 @@ class GeometryAnalyzerTests(unittest.TestCase):
 
         self.assertEqual(estimate.pierce_count, 1)
 
+    def test_surface_only_iges_skips_automatic_sheet_analysis(self) -> None:
+        import cad.analyzer as analyzer_module
+        from cad.sheet_analyzer import SheetAnalysisResult
+
+        calls = {"sheet": 0}
+        original_sheet = analyzer_module.analyze_sheet_shape
+        original_classify = analyzer_module.classify_cut_edges
+
+        def fake_sheet_analysis(*args, **kwargs):
+            calls["sheet"] += 1
+            return SheetAnalysisResult(
+                width_mm=1500.0,
+                height_mm=100.0,
+                thickness_mm=3.0,
+                thickness_axis="X",
+                cut_length_mm=3200.0,
+                pierce_count=1,
+                contours=(),
+                segments=(),
+            )
+
+        def fake_classification(*args, **kwargs):
+            return EdgeClassificationResult(
+                cut_edges=(),
+                all_edge_count=0,
+                outer_face_count=0,
+            )
+
+        analyzer_module.analyze_sheet_shape = fake_sheet_analysis
+        analyzer_module.classify_cut_edges = fake_classification
+        try:
+            result = analyze_shape(
+                object(),
+                summary=ShapeSummary(
+                    diagonal_mm=1503.3,
+                    size_x_mm=3.0,
+                    size_y_mm=100.0,
+                    size_z_mm=1500.0,
+                    face_count=281,
+                    edge_count=2002,
+                ),
+                file_format="IGES",
+                import_warnings=(IgesEntitySummary(entity_count=1, entity_counts={144: 1}).warning(),),
+            )
+        finally:
+            analyzer_module.analyze_sheet_shape = original_sheet
+            analyzer_module.classify_cut_edges = original_classify
+
+        self.assertEqual(calls["sheet"], 0)
+        self.assertNotEqual(result.profile_hint, "листовая деталь")
+        self.assertIsNone(result.sheet_analysis)
+        self.assertTrue(
+            any("Листовой анализ пропущен" in warning for warning in result.warnings)
+        )
+
     def test_outer_longitudinal_face_uses_orientation_not_length_fraction(self) -> None:
         # Envelope of a 25x25 tube, 1000 mm long along Z.
         gb = Bounds(0.0, 0.0, 0.0, 25.0, 25.0, 1000.0)
