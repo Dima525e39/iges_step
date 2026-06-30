@@ -39,8 +39,10 @@ from core.file_job import (
     STATUS_IMPORTED,
     STATUS_IMPORTING,
     STATUS_PENDING,
+    has_explicit_quantity_in_filename,
 )
 from core.file_queue import AddFilesResult, FileQueue
+from core.specification_importer import load_quantity_specification, quantity_for_file
 from export.csv_exporter import export_jobs_to_csv
 from export.excel_exporter import export_excel_workbook
 from export.json_project import load_project, save_project
@@ -93,6 +95,8 @@ class MainWindow(QMainWindow):
         self.import_thread: QThread | None = None
         self.import_worker: CadImportWorker | None = None
         self.geometry_debug_dialog: GeometryDebugDialog | None = None
+        self._shown_3d_path: str | None = None
+        self._shown_2d_path: str | None = None
 
         self.setAcceptDrops(True)
         self.setWindowTitle(f"{APP_NAME} {build_label()}")
@@ -385,6 +389,7 @@ class MainWindow(QMainWindow):
         self.file_table.itemSelectionChanged.connect(self._sync_from_table_selection)
         self.diagnostic_table.itemSelectionChanged.connect(self._sync_from_diagnostic_selection)
         self.compact_list.currentRowChanged.connect(self._sync_from_compact_selection)
+        self.tabs.currentChanged.connect(self._on_tab_changed)
         self.geometry_debug_button.clicked.connect(self._open_geometry_debugger)
         self.manual_thickness_checkbox.toggled.connect(self.manual_thickness_input.setEnabled)
 
@@ -525,6 +530,73 @@ class MainWindow(QMainWindow):
         self._refresh_jobs()
         self.statusBar().showMessage(f"Проект открыт: {Path(source_path).name}", 5000)
 
+    def _import_quantity_specification(self) -> None:
+        if len(self.queue) == 0:
+            QMessageBox.information(
+                self,
+                "Импорт количества",
+                "Сначала добавьте CAD-файлы в список.",
+            )
+            return
+        source_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Импорт количества из Excel",
+            "",
+            "Excel (*.xlsx *.xlsm)",
+        )
+        if not source_path:
+            return
+        try:
+            specification = load_quantity_specification(source_path)
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Импорт количества",
+                f"Не удалось прочитать спецификацию:\n{exc}",
+            )
+            return
+        if not specification:
+            QMessageBox.warning(
+                self,
+                "Импорт количества",
+                "В спецификации не найдены колонки с названием детали и количеством.",
+            )
+            return
+
+        updated = 0
+        skipped_explicit = 0
+        unmatched: list[str] = []
+        for job in self.queue.jobs():
+            if has_explicit_quantity_in_filename(job.path):
+                skipped_explicit += 1
+                continue
+            item = quantity_for_file(job.path, specification)
+            if item is None:
+                unmatched.append(job.name)
+                continue
+            job.quantity = item.quantity
+            analysis = self.shape_analyses.get(job.normalized_path)
+            if analysis is not None:
+                self._update_job_price(job, analysis)
+            updated += 1
+
+        self._refresh_jobs()
+        message = (
+            f"Обновлено количеств: {updated}\n"
+            f"Пропущено файлов с количеством в имени: {skipped_explicit}\n"
+            f"Не найдено в спецификации: {len(unmatched)}"
+        )
+        if unmatched:
+            preview = "\n".join(unmatched[:8])
+            if len(unmatched) > 8:
+                preview += f"\n... еще {len(unmatched) - 8}"
+            message += f"\n\nНе найдено:\n{preview}"
+        QMessageBox.information(self, "Импорт количества", message)
+        self.statusBar().showMessage(
+            f"Количество обновлено из спецификации: {Path(source_path).name}",
+            6000,
+        )
+
     def _start_import(self, paths: list[str]) -> None:
         if self.import_thread is not None:
             QMessageBox.information(self, "Импорт", "Импорт уже выполняется.")
@@ -604,24 +676,13 @@ class MainWindow(QMainWindow):
         self.imported_shapes[job.normalized_path] = shape
         self.shape_summaries[job.normalized_path] = shape_summary
         self.shape_analyses[job.normalized_path] = geometry_analysis
+        self._invalidate_preview_cache(job.normalized_path)
 
         job.status = STATUS_IMPORTED
         self._apply_analysis_to_job(job, geometry_analysis, fallback_profile=str(file_format))
         job.error_text = ""
 
         self._refresh_jobs()
-        current_job = self._current_job()
-        if current_job is not None and current_job.normalized_path == job.normalized_path:
-            if shape is None:
-                self.viewer_3d.show_message(f"{job.name}\nDXF-лист открыт в 2D.")
-                self.viewer_2d.show_unfolding(
-                    job,
-                    shape=None,
-                    summary=shape_summary,
-                    analysis=geometry_analysis,
-                )
-            else:
-                self.viewer_3d.show_shape(shape, job.name)
 
     def _on_import_failed(self, path: str, error_message: str) -> None:
         job = self.queue.get(path)
@@ -637,6 +698,7 @@ class MainWindow(QMainWindow):
         self.imported_shapes.pop(job.normalized_path, None)
         self.shape_summaries.pop(job.normalized_path, None)
         self.shape_analyses.pop(job.normalized_path, None)
+        self._invalidate_preview_cache(job.normalized_path)
         self._refresh_jobs()
 
     def _finish_import_thread(self) -> None:
@@ -1128,6 +1190,15 @@ class MainWindow(QMainWindow):
         self.diagnostic_table.blockSignals(False)
         self._show_selected_job(self.queue.get(path))
 
+    def _on_tab_changed(self, _index: int) -> None:
+        self._show_selected_preview(self._current_job(), force=False)
+
+    def _invalidate_preview_cache(self, path: str) -> None:
+        if self._shown_3d_path == path:
+            self._shown_3d_path = None
+        if self._shown_2d_path == path:
+            self._shown_2d_path = None
+
     def _select_compact_path(self, path: str) -> None:
         for row in range(self.compact_list.count()):
             item = self.compact_list.item(row)
@@ -1149,20 +1220,7 @@ class MainWindow(QMainWindow):
         shape = self.imported_shapes.get(job.normalized_path) if job is not None else None
         summary = self.shape_summaries.get(job.normalized_path) if job is not None else None
         analysis = self.shape_analyses.get(job.normalized_path) if job is not None else None
-        if shape is None and getattr(analysis, "sheet_analysis", None) is None:
-            self.viewer_3d.show_job(job)
-            self.viewer_2d.show_job(job)
-        else:
-            if shape is None:
-                self.viewer_3d.show_message(f"{job.name}\nDXF-лист открыт в 2D.")
-            else:
-                self.viewer_3d.show_shape(shape, job.name)
-            self.viewer_2d.show_unfolding(
-                job,
-                shape=shape,
-                summary=summary,
-                analysis=analysis,
-            )
+        self._show_selected_preview(job, force=False)
         self.geometry_debug_button.setEnabled(shape is not None)
         if self.geometry_debug_dialog is not None:
             self.geometry_debug_dialog.set_context(
@@ -1227,6 +1285,43 @@ class MainWindow(QMainWindow):
         for label, value in zip(labels, values, strict=True):
             label.setText(value)
         self.warning_label.setText(warnings)
+
+    def _show_selected_preview(self, job: FileJob | None, *, force: bool = False) -> None:
+        current_widget = self.tabs.currentWidget()
+        if current_widget not in (self.viewer_3d, self.viewer_2d):
+            return
+
+        path = job.normalized_path if job is not None else ""
+        shape = self.imported_shapes.get(path) if job is not None else None
+        summary = self.shape_summaries.get(path) if job is not None else None
+        analysis = self.shape_analyses.get(path) if job is not None else None
+        has_sheet = getattr(analysis, "sheet_analysis", None) is not None
+
+        if current_widget is self.viewer_3d:
+            if not force and self._shown_3d_path == path:
+                return
+            if shape is None and not has_sheet:
+                self.viewer_3d.show_job(job)
+            elif shape is None:
+                self.viewer_3d.show_message(f"{job.name}\nDXF-лист открыт в 2D.")
+            else:
+                self.viewer_3d.show_shape(shape, job.name)
+            self._shown_3d_path = path
+            return
+
+        if current_widget is self.viewer_2d:
+            if not force and self._shown_2d_path == path:
+                return
+            if shape is None and not has_sheet:
+                self.viewer_2d.show_job(job)
+            else:
+                self.viewer_2d.show_unfolding(
+                    job,
+                    shape=shape,
+                    summary=summary,
+                    analysis=analysis,
+                )
+            self._shown_2d_path = path
 
     def _open_geometry_debugger(self) -> None:
         job = self._current_job()

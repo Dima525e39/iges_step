@@ -22,6 +22,11 @@ _QUANTITY_PATTERNS = (
 
 
 def parse_quantity_from_filename(path: str | Path) -> int:
+    quantity = explicit_quantity_from_filename(path)
+    return quantity if quantity is not None else 1
+
+
+def explicit_quantity_from_filename(path: str | Path) -> int | None:
     stem = Path(path).stem.strip()
     for pattern in _QUANTITY_PATTERNS:
         match = pattern.search(stem)
@@ -33,7 +38,11 @@ def parse_quantity_from_filename(path: str | Path) -> int:
             continue
         if quantity >= 1:
             return min(quantity, 9999)
-    return 1
+    return None
+
+
+def has_explicit_quantity_in_filename(path: str | Path) -> bool:
+    return explicit_quantity_from_filename(path) is not None
 
 
 @dataclass(slots=True)

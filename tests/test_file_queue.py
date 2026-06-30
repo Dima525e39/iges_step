@@ -51,8 +51,18 @@ from cad.profile_detector import detect_profile_from_dimensions
 from cad.shape_summary import ShapeSummary
 from cad.step_text_analyzer import analyze_step_round_tube_text
 from cad.supported_formats import collect_supported_files, is_supported_cad_file
-from core.file_job import parse_quantity_from_filename
+from core.file_job import (
+    explicit_quantity_from_filename,
+    has_explicit_quantity_in_filename,
+    parse_quantity_from_filename,
+)
 from core.file_queue import FileQueue
+from core.specification_importer import (
+    SpecificationItem,
+    load_quantity_specification,
+    normalize_spec_name,
+    quantity_for_file,
+)
 
 
 class FakeTopExpExplorer:
@@ -77,6 +87,14 @@ class FakeVertex:
 class FakeCylinderFace:
     def __init__(self, radius_mm: float) -> None:
         self.radius_mm = radius_mm
+
+
+def _openpyxl_or_skip(test_case: unittest.TestCase):
+    try:
+        import openpyxl
+    except ImportError:
+        test_case.skipTest("openpyxl is not installed in this Python environment")
+    return openpyxl
 
 
 class SupportedFormatTests(unittest.TestCase):
@@ -148,6 +166,62 @@ class FileQueueTests(unittest.TestCase):
         for filename, expected in cases.items():
             with self.subTest(filename=filename):
                 self.assertEqual(parse_quantity_from_filename(filename), expected)
+
+    def test_explicit_quantity_from_filename_marks_missing_quantity(self) -> None:
+        self.assertEqual(explicit_quantity_from_filename("Корпус бок Д2_3шт.igs"), 3)
+        self.assertIsNone(explicit_quantity_from_filename("Корпус бок Д2.igs"))
+        self.assertTrue(has_explicit_quantity_in_filename("Корпус бок Д2_3шт.igs"))
+        self.assertFalse(has_explicit_quantity_in_filename("Корпус бок Д2.igs"))
+
+    def test_quantity_specification_matches_file_stem(self) -> None:
+        items = {
+            normalize_spec_name("Корпус центр Д2"): SpecificationItem(
+                name="Корпус центр Д2",
+                quantity=2,
+                row=12,
+            )
+        }
+
+        item = quantity_for_file("Корпус центр Д2.IGS", items)
+
+        self.assertIsNotNone(item)
+        self.assertEqual(item.quantity, 2)
+
+    def test_quantity_specification_reads_named_columns(self) -> None:
+        openpyxl = _openpyxl_or_skip(self)
+        from tempfile import TemporaryDirectory
+
+        with TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "spec.xlsx"
+            workbook = openpyxl.Workbook()
+            sheet = workbook.active
+            sheet.append(["", "Название", "Кол-во", "Заготовка"])
+            sheet.append(["", "Корпус центр Д2", 2, "труба 60х60х3"])
+            workbook.save(path)
+
+            items = load_quantity_specification(path)
+
+        item = quantity_for_file("Корпус центр Д2.IGS", items)
+        self.assertIsNotNone(item)
+        self.assertEqual(item.quantity, 2)
+
+    def test_quantity_specification_guesses_columns_without_headers(self) -> None:
+        openpyxl = _openpyxl_or_skip(self)
+        from tempfile import TemporaryDirectory
+
+        with TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "spec.xlsx"
+            workbook = openpyxl.Workbook()
+            sheet = workbook.active
+            sheet.append(["Корпус бок Д2", 2, "труба 60х60х3"])
+            sheet.append(["Корпус центр Д2", 2, "труба 60х60х3"])
+            workbook.save(path)
+
+            items = load_quantity_specification(path)
+
+        item = quantity_for_file("Корпус бок Д2.IGS", items)
+        self.assertIsNotNone(item)
+        self.assertEqual(item.quantity, 2)
 
 
 class CadImporterTests(unittest.TestCase):

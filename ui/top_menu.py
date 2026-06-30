@@ -11,6 +11,7 @@ def install_top_menu(window: QMainWindow) -> None:
     file_menu = menu_bar.addMenu("Файл")
     _add_action(file_menu, "Добавить файл", window._choose_files)
     _add_action(file_menu, "Добавить папку", window._choose_folder)
+    _add_action(file_menu, "Импорт количества из Excel", window._import_quantity_specification)
     file_menu.addSeparator()
     _add_action(file_menu, "Сохранить проект", window._save_project)
     _add_action(file_menu, "Открыть проект", window._open_project)
