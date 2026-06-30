@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import QCheckBox, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from core.file_job import FileJob
+
+
+MIB = 1024 * 1024
 
 
 def _wheel_zoom_factor(delta_y: int) -> float:
@@ -41,11 +46,60 @@ def _zoom_drag_delta(zoom_factor: float) -> int:
     return 0
 
 
+@dataclass
+class CachedPresentation:
+    presentations: list[object]
+    estimated_bytes: int
+
+
+def _count_subshapes(shape: object, top_abs_kind: object) -> int:
+    try:
+        from OCC.Core.TopExp import TopExp_Explorer
+    except Exception:
+        return 0
+
+    count = 0
+    try:
+        explorer = TopExp_Explorer(shape, top_abs_kind)
+        while explorer.More():
+            count += 1
+            explorer.Next()
+    except Exception:
+        return 0
+    return count
+
+
+def _estimate_presentation_bytes(shape: object, presentations: list[object]) -> int:
+    try:
+        from OCC.Core.TopAbs import TopAbs_EDGE, TopAbs_FACE, TopAbs_VERTEX
+    except Exception:
+        return 64 * MIB
+
+    vertex_count = _count_subshapes(shape, TopAbs_VERTEX)
+    edge_count = _count_subshapes(shape, TopAbs_EDGE)
+    face_count = _count_subshapes(shape, TopAbs_FACE)
+
+    if vertex_count <= 0 and edge_count <= 0 and face_count <= 0:
+        return 64 * MIB
+
+    return (
+        16 * MIB
+        + len(presentations) * 4 * MIB
+        + vertex_count * 4 * 1024
+        + edge_count * 32 * 1024
+        + face_count * 512 * 1024
+    )
+
+
 class Viewer3D(QWidget):
+    MAX_PRESENTATION_CACHE_BYTES = 500 * MIB
+
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._canvas = None
         self._display = None
+        self._presentation_cache: dict[str, CachedPresentation] = {}
+        self._current_cache_key: str | None = None
 
         self.label = QLabel("Модель не загружена")
         self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -96,8 +150,16 @@ class Viewer3D(QWidget):
             return
 
         try:
-            self._display.EraseAll()
-            self._display.DisplayShape(shape, update=True)
+            cache_key = self._cache_key(shape, title)
+            if not self._display_cached_shape(cache_key):
+                self._display.EraseAll()
+                presentations = list(self._display.DisplayShape(shape, update=False) or [])
+                self._presentation_cache[cache_key] = CachedPresentation(
+                    presentations=presentations,
+                    estimated_bytes=_estimate_presentation_bytes(shape, presentations),
+                )
+                self._trim_presentation_cache(active_key=cache_key)
+            self._current_cache_key = cache_key
             self._disable_selection_mode()
             self.label.hide()
             self._canvas.show()
@@ -105,6 +167,55 @@ class Viewer3D(QWidget):
         except Exception as exc:
             name = f"{title}\n" if title else ""
             self.show_message(f"{name}Не удалось показать 3D-модель:\n{exc}")
+
+    def _cache_key(self, shape: object, title: str) -> str:
+        return f"{title or '<shape>'}:{id(shape)}"
+
+    def _display_cached_shape(self, cache_key: str) -> bool:
+        cached = self._presentation_cache.get(cache_key)
+        if cached is None or not cached.presentations:
+            return False
+        context = getattr(self._display, "Context", None)
+        if context is None:
+            return False
+        try:
+            self._display.EraseAll()
+            for presentation in cached.presentations:
+                context.Display(presentation, False)
+            repaint = getattr(self._display, "Repaint", None)
+            if repaint is not None:
+                repaint()
+            return True
+        except Exception:
+            self._presentation_cache.pop(cache_key, None)
+            return False
+
+    def _trim_presentation_cache(self, *, active_key: str) -> None:
+        while (
+            self._presentation_cache_bytes() > self.MAX_PRESENTATION_CACHE_BYTES
+            and len(self._presentation_cache) > 1
+        ):
+            key = next((item for item in self._presentation_cache if item != active_key), None)
+            if key is None:
+                break
+            cached = self._presentation_cache.pop(key)
+            self._remove_presentations_from_context(cached.presentations)
+
+    def _presentation_cache_bytes(self) -> int:
+        return sum(entry.estimated_bytes for entry in self._presentation_cache.values())
+
+    def _remove_presentations_from_context(self, presentations: list[object]) -> None:
+        context = getattr(self._display, "Context", None)
+        if context is None:
+            return
+        for presentation in presentations:
+            remove = getattr(context, "Remove", None)
+            if remove is None:
+                continue
+            try:
+                remove(presentation, False)
+            except Exception:
+                pass
 
     def _schedule_fit_view(self) -> None:
         for delay in (0, 50, 150, 350):
@@ -151,6 +262,7 @@ class Viewer3D(QWidget):
     def show_message(self, message: str) -> None:
         if self._canvas is not None:
             self._canvas.hide()
+        self._current_cache_key = None
         self.label.setText(message)
         self.label.show()
 
