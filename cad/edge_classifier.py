@@ -323,6 +323,15 @@ def classify_cut_edges(
         has_outer_faces=outer_face_count > 0,
         tolerance=tolerance,
     )
+    rotated_profile_fallback_analysis = _analyze_rotated_profile_edge_fallback(
+        face_records,
+        edge_records,
+        axis=axis,
+        length_mm=length_mm,
+        global_bounds=global_bounds,
+        has_outer_faces=outer_face_count > 0,
+        tolerance=tolerance,
+    )
     round_edge_fallback_analysis = _analyze_round_tube_edge_fallback(
         edge_records,
         axis=axis,
@@ -334,6 +343,7 @@ def classify_cut_edges(
     use_round_loop_analysis = bool(round_loop_analysis.cut_edges)
     use_cut_face_analysis = bool(cut_face_analysis.cut_edges)
     use_round_bspline_bbox_fallback = bool(round_bspline_bbox_analysis.cut_edges)
+    use_rotated_profile_fallback = bool(rotated_profile_fallback_analysis.cut_edges)
     use_round_edge_fallback = bool(round_edge_fallback_analysis.cut_edges)
     if use_round_loop_analysis:
         _suppress_legacy_cut_edges(
@@ -369,6 +379,13 @@ def classify_cut_edges(
         )
         groups = _groups_from_edge_records(edge_records)
         cut_edges = cut_face_analysis.cut_edges
+    elif use_rotated_profile_fallback:
+        _suppress_legacy_cut_edges(
+            edge_records,
+            selected_cut_edges=rotated_profile_fallback_analysis.cut_edges,
+        )
+        groups = _groups_from_edge_records(edge_records)
+        cut_edges = rotated_profile_fallback_analysis.cut_edges
     elif use_round_edge_fallback:
         _suppress_legacy_cut_edges(
             edge_records,
@@ -403,6 +420,12 @@ def classify_cut_edges(
         warnings.append(
             "Длина реза рассчитана по наружным границам граней стенки реза; "
             "внутренние кромки толщины и разбиение CAD-граней не суммируются."
+        )
+    elif use_rotated_profile_fallback:
+        pierce_count_override = rotated_profile_fallback_analysis.pierce_count
+        warnings.append(
+            "Повернутая профильная труба рассчитана fallback-логикой: "
+            "торцы берутся по наружному контуру, внутренние кромки толщины не суммируются."
         )
     elif use_round_edge_fallback:
         pierce_count_override = round_edge_fallback_analysis.pierce_count
@@ -712,6 +735,16 @@ def estimate_wall_thickness(
     if flat_estimate.thickness_mm > tolerance:
         return flat_estimate
 
+    rotated_estimate = _estimate_rotated_profile_wall_thickness(
+        faces,
+        axis=axis,
+        length_mm=length_mm,
+        global_bounds=global_bounds,
+        tolerance=tolerance,
+    )
+    if rotated_estimate.thickness_mm > tolerance:
+        return rotated_estimate
+
     if round_has_thickness:
         return round_estimate
 
@@ -917,6 +950,54 @@ def _flat_wall_section(
         "side": side,
         "is_outer": is_outer,
     }
+
+
+def _estimate_rotated_profile_wall_thickness(
+    face_records: tuple[FaceRecord, ...],
+    *,
+    axis: str,
+    length_mm: float,
+    global_bounds: Bounds,
+    tolerance: float,
+) -> ThicknessEstimate:
+    if not _looks_like_rotated_square_profile(
+        face_records,
+        axis=axis,
+        length_mm=length_mm,
+        global_bounds=global_bounds,
+        tolerance=tolerance,
+    ):
+        return ThicknessEstimate()
+    axis_index = AXIS_INDEX[axis]
+    cross_indexes = [index for index in range(3) if index != axis_index]
+    wall_faces = _rotated_profile_wall_faces(
+        face_records,
+        axis=axis,
+        length_mm=length_mm,
+        global_bounds=global_bounds,
+        tolerance=tolerance,
+    )
+    values: list[float] = []
+    for left_index, left in enumerate(wall_faces):
+        left_center = _bounds_center(left.bounds)
+        left_span = _rotated_profile_cross_span(left.bounds, cross_indexes)
+        for right in wall_faces[left_index + 1 :]:
+            right_span = _rotated_profile_cross_span(right.bounds, cross_indexes)
+            if not _same_rotated_wall_span(left_span, right_span, tolerance=tolerance):
+                continue
+            dx = left_center[cross_indexes[0]] - _bounds_center(right.bounds)[cross_indexes[0]]
+            dy = left_center[cross_indexes[1]] - _bounds_center(right.bounds)[cross_indexes[1]]
+            distance = (dx * dx + dy * dy) ** 0.5
+            if tolerance < distance <= max(8.0, min(global_bounds.sizes[index] for index in cross_indexes) * 0.12):
+                values.append(distance)
+    if not values:
+        return ThicknessEstimate()
+    thickness = _median(tuple(values))
+    return ThicknessEstimate(
+        thickness_mm=thickness,
+        method="повернутый профиль: смещение наружной/внутренней стенки",
+        confidence="средняя" if len(values) < 4 else "высокая",
+    )
 
 
 def _cylinder_radius(face: object) -> float | None:
@@ -1331,6 +1412,149 @@ def _round_loop_edge_type(
     ):
         return CUT_END
     return CUT_FEATURE
+
+
+def _analyze_rotated_profile_edge_fallback(
+    face_records: tuple[FaceRecord, ...] | list[FaceRecord],
+    edge_records: tuple[EdgeRecord, ...] | list[EdgeRecord],
+    *,
+    axis: str,
+    length_mm: float,
+    global_bounds: Bounds,
+    has_outer_faces: bool,
+    tolerance: float,
+) -> CutFaceAnalysis:
+    faces = tuple(face_records)
+    if has_outer_faces:
+        return CutFaceAnalysis()
+    if not _looks_like_rotated_square_profile(
+        faces,
+        axis=axis,
+        length_mm=length_mm,
+        global_bounds=global_bounds,
+        tolerance=tolerance,
+    ):
+        return CutFaceAnalysis()
+
+    selected: list[EdgeRecord] = []
+    for edge in edge_records:
+        if edge.length_mm <= tolerance:
+            continue
+        if _looks_like_longitudinal_seam(edge, axis=axis, length_mm=length_mm):
+            continue
+        if edge.bounds is not None:
+            axial_span = edge.bounds.sizes[AXIS_INDEX[axis]]
+            if axial_span >= max(length_mm * 0.92, length_mm - tolerance * 4.0):
+                continue
+
+        is_end = _is_tube_end_edge(
+            edge,
+            axis=axis,
+            global_bounds=global_bounds,
+            tolerance=tolerance,
+            allow_outer_only=True,
+        )
+        if is_end and "inner_wire" in edge.wire_roles:
+            continue
+        edge.edge_type = CUT_END if is_end else CUT_FEATURE
+        edge.reason = f"{edge.edge_type} rotated profile fallback"
+        selected.append(edge)
+
+    if not selected:
+        return CutFaceAnalysis()
+
+    component_ids = _cut_edge_component_ids(
+        tuple(selected),
+        axis=axis,
+        global_bounds=global_bounds,
+        tolerance=tolerance,
+    )
+    for index, edge in enumerate(selected):
+        edge.cut_component_id = component_ids.get(index, 0)
+    pierce_count = len({component for component in component_ids.values() if component > 0})
+    return CutFaceAnalysis(cut_edges=tuple(selected), pierce_count=pierce_count)
+
+
+def _looks_like_rotated_square_profile(
+    face_records: tuple[FaceRecord, ...],
+    *,
+    axis: str,
+    length_mm: float,
+    global_bounds: Bounds,
+    tolerance: float,
+) -> bool:
+    axis_index = AXIS_INDEX[axis]
+    cross_indexes = [index for index in range(3) if index != axis_index]
+    if len(cross_indexes) != 2:
+        return False
+    cross_sizes = [global_bounds.sizes[index] for index in cross_indexes]
+    cross_min = min(cross_sizes)
+    cross_max = max(cross_sizes)
+    if cross_min <= tolerance or cross_min / cross_max < 0.92:
+        return False
+    wall_faces = _rotated_profile_wall_faces(
+        face_records,
+        axis=axis,
+        length_mm=length_mm,
+        global_bounds=global_bounds,
+        tolerance=tolerance,
+    )
+    return len(wall_faces) >= 4
+
+
+def _rotated_profile_wall_faces(
+    face_records: tuple[FaceRecord, ...],
+    *,
+    axis: str,
+    length_mm: float,
+    global_bounds: Bounds,
+    tolerance: float,
+) -> tuple[FaceRecord, ...]:
+    axis_index = AXIS_INDEX[axis]
+    cross_indexes = [index for index in range(3) if index != axis_index]
+    global_cross = min(global_bounds.sizes[index] for index in cross_indexes)
+    min_diag = global_cross * 0.35
+    max_diag = global_cross * 0.75
+    faces: list[FaceRecord] = []
+    for face in face_records:
+        if face.bounds.sizes[axis_index] < max(length_mm * 0.65, tolerance):
+            continue
+        first = face.bounds.sizes[cross_indexes[0]]
+        second = face.bounds.sizes[cross_indexes[1]]
+        if first <= tolerance or second <= tolerance:
+            continue
+        ratio = min(first, second) / max(first, second)
+        if ratio < 0.85:
+            continue
+        diag = (first * first + second * second) ** 0.5
+        if min_diag <= diag <= max_diag:
+            faces.append(face)
+    return tuple(faces)
+
+
+def _rotated_profile_cross_span(
+    bounds: Bounds,
+    cross_indexes: list[int],
+) -> float:
+    first = bounds.sizes[cross_indexes[0]]
+    second = bounds.sizes[cross_indexes[1]]
+    return (first * first + second * second) ** 0.5
+
+
+def _same_rotated_wall_span(first: float, second: float, *, tolerance: float) -> bool:
+    smaller = min(first, second)
+    larger = max(first, second)
+    if smaller <= tolerance:
+        return larger <= tolerance
+    return larger / smaller <= 1.08
+
+
+def _bounds_center(bounds: Bounds) -> tuple[float, float, float]:
+    return (
+        (bounds.xmin + bounds.xmax) / 2.0,
+        (bounds.ymin + bounds.ymax) / 2.0,
+        (bounds.zmin + bounds.zmax) / 2.0,
+    )
 
 
 def _analyze_round_tube_edge_fallback(

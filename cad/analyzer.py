@@ -437,11 +437,20 @@ def _refine_profile_from_faces(
 ) -> tuple[float, float] | None:
     current_width = max(float(width_mm), float(height_mm))
     known_side = min(float(width_mm), float(height_mm))
+    face_records = getattr(classification, "face_records", ())
+    rotated_side = _rotated_square_profile_side_candidate_from_faces(face_records)
+    if (
+        rotated_side > 0.0
+        and current_width > rotated_side * 1.15
+        and current_width < rotated_side * 1.60
+    ):
+        return rotated_side, rotated_side
+
     if known_side <= 0.0 or current_width <= known_side * 2.5:
         return None
 
     candidate_side = _profile_side_candidate_from_faces(
-        getattr(classification, "face_records", ()),
+        face_records,
         known_side=known_side,
     )
     if candidate_side <= 0.0:
@@ -487,6 +496,36 @@ def _profile_side_candidate_from_faces(
     if not candidates:
         return 0.0
     return min(candidates, key=lambda value: abs(value - known_side))
+
+
+def _rotated_square_profile_side_candidate_from_faces(face_records: object) -> float:
+    flat_lengths: list[float] = []
+    radius_spans: list[float] = []
+    for face in face_records:
+        bounds = getattr(face, "bounds", None)
+        if bounds is None:
+            continue
+        sizes = sorted((size for size in bounds.sizes if size > 0.001))
+        if len(sizes) < 3:
+            continue
+        small, middle, large = sizes
+        if large <= 0.0:
+            continue
+        if middle / large > 0.35:
+            continue
+        if small > 0.0 and small / middle >= 0.85:
+            flat_lengths.append((small * small + middle * middle) ** 0.5)
+            continue
+        if middle > small * 2.0:
+            radius_spans.append(middle / (2.0 ** 0.5))
+    if not flat_lengths or not radius_spans:
+        return 0.0
+    flat = max(flat_lengths)
+    radius = max(radius_spans)
+    side = flat + radius * 2.0
+    if side <= 0.0:
+        return 0.0
+    return round(side, 3)
 
 
 def _should_use_step_round_text_analysis(
