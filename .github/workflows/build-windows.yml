@@ -9,6 +9,9 @@ on:
     tags:
       - "v*"
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: windows-latest
@@ -51,7 +54,9 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force package | Out-Null
+          New-Item -ItemType Directory -Force package\latest | Out-Null
           & "C:\Program Files\7-Zip\7z.exe" a -t7z -mx=9 package\TubeCutCalculator-v0.5.5-windows.7z dist\TubeCutCalculator.exe dist\version.txt
+          Copy-Item package\TubeCutCalculator-v0.5.5-windows.7z package\latest\TubeCutCalculator-windows-latest.7z
           Get-ChildItem -Recurse package
 
       - name: Upload artifact
@@ -66,3 +71,18 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: package/*.7z
+
+      - name: Publish latest Windows build
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: Latest Windows build
+          body: |
+            Автоматическая последняя Windows-сборка из ветки main.
+
+            Commit: ${{ github.sha }}
+            Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          prerelease: true
+          make_latest: false
+          files: package/latest/TubeCutCalculator-windows-latest.7z
