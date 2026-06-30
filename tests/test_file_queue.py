@@ -38,6 +38,7 @@ from cad.importer import (
     CadImportError,
     CadImporter,
     IgesEntitySummary,
+    _heal_surface_only_iges_shape,
     _sanitize_iges_ascii_bytes,
     _sew_iges_shape,
     scan_iges_entity_summary,
@@ -255,7 +256,7 @@ class CadImporterTests(unittest.TestCase):
         self.assertTrue(summary.has_brep_topology)
         self.assertFalse(summary.is_surface_only_model)
 
-    def test_surface_only_iges_skips_automatic_sewing(self) -> None:
+    def test_surface_only_iges_attempts_solid_healing(self) -> None:
         import cad.importer as importer_module
         from tempfile import TemporaryDirectory
 
@@ -263,14 +264,21 @@ class CadImporterTests(unittest.TestCase):
             def IsNull(self) -> bool:
                 return False
 
+        class FakeSolid:
+            def IsNull(self) -> bool:
+                return False
+
         original_read_once = CadImporter._read_iges_once
-        original_sew = importer_module._sew_iges_shape
-        sew_calls: list[object] = []
+        original_heal = importer_module._heal_surface_only_iges_shape
+        heal_calls: list[object] = []
         shape = FakeShape()
+        solid = FakeSolid()
 
         try:
             CadImporter._read_iges_once = staticmethod(lambda path: shape)
-            importer_module._sew_iges_shape = lambda candidate: sew_calls.append(candidate) or candidate
+            importer_module._heal_surface_only_iges_shape = (
+                lambda candidate: heal_calls.append(candidate) or solid
+            )
             with TemporaryDirectory() as temp_dir:
                 path = Path(temp_dir) / "surface.igs"
                 path.write_text("", encoding="ascii")
@@ -283,10 +291,14 @@ class CadImporterTests(unittest.TestCase):
                 )
         finally:
             CadImporter._read_iges_once = original_read_once
-            importer_module._sew_iges_shape = original_sew
+            importer_module._heal_surface_only_iges_shape = original_heal
 
-        self.assertIs(result, shape)
-        self.assertEqual(sew_calls, [])
+        self.assertIs(result, solid)
+        self.assertEqual(heal_calls, [shape])
+
+    def test_surface_only_iges_healing_falls_back_to_original_shape(self) -> None:
+        sentinel = object()
+        self.assertIs(_heal_surface_only_iges_shape(sentinel), sentinel)
 
     def test_sew_iges_shape_returns_shape_unchanged_when_sewing_unavailable(self) -> None:
         # When OpenCascade (or its sewing API) is not importable, healing must

@@ -15,6 +15,7 @@ from cad.supported_formats import is_supported_cad_file
 # planes of one multi-plane cut belong together. The tolerance is the maximum
 # gap that is still treated as a coincident edge.
 IGES_SEW_TOLERANCE_MM = 0.01
+IGES_SOLID_SEW_TOLERANCES_MM = (0.01, 0.05, 0.1)
 IGES_BREP_ENTITY_TYPES = frozenset({186, 502, 504, 508, 510, 514})
 IGES_SURFACE_ENTITY_TYPES = frozenset(
     {
@@ -73,7 +74,8 @@ class IgesEntitySummary:
     def warning(self) -> str:
         return (
             "IGES содержит поверхности без B-Rep solid/shell; "
-            "автоматическая сшивка пропущена, используется анализ поверхностей."
+            "выполняется попытка собрать поверхности в solid, "
+            "при неудаче используется анализ поверхностей."
         )
 
 
@@ -181,7 +183,7 @@ class CadImporter:
                     continue
                 if not _shape_is_null(shape):
                     if iges_summary is not None and iges_summary.is_surface_only_model:
-                        return shape
+                        return _heal_surface_only_iges_shape(shape)
                     return _sew_iges_shape(shape)
                 last_error = CadImportError("OpenCascade вернул пустую IGES-модель.")
         finally:
@@ -210,7 +212,26 @@ class CadImporter:
         return reader.OneShape()
 
 
-def _sew_iges_shape(shape: object) -> object:
+def _heal_surface_only_iges_shape(shape: object) -> object:
+    """Try to convert a surface-only IGES import into a valid solid.
+
+    Some SolidWorks IGES files contain only trimmed surfaces. When the surfaces
+    are watertight, OpenCascade can sew them into a shell and build a solid,
+    which gives the downstream cut analysis better shared topology. If any
+    step fails, return the original shape unchanged so import remains robust.
+    """
+    if shape is None:
+        return shape
+
+    for tolerance in IGES_SOLID_SEW_TOLERANCES_MM:
+        sewed = _sew_iges_shape(shape, tolerance=tolerance)
+        solid = _solid_from_shape(sewed)
+        if solid is not None:
+            return solid
+    return shape
+
+
+def _sew_iges_shape(shape: object, *, tolerance: float = IGES_SEW_TOLERANCE_MM) -> object:
     """Sew free IGES surfaces into a shell with shared edges and vertices.
 
     Returns the sewed shape on success, or the original shape unchanged on any
@@ -223,7 +244,7 @@ def _sew_iges_shape(shape: object) -> object:
     try:
         from OCC.Core.BRepBuilderAPI import BRepBuilderAPI_Sewing
 
-        sewing = BRepBuilderAPI_Sewing(IGES_SEW_TOLERANCE_MM)
+        sewing = BRepBuilderAPI_Sewing(tolerance)
         sewing.Add(shape)
         sewing.Perform()
         sewed = sewing.SewedShape()
@@ -238,6 +259,69 @@ def _sew_iges_shape(shape: object) -> object:
     except Exception:
         return shape
     return sewed
+
+
+def _solid_from_shape(shape: object) -> object | None:
+    if shape is None or _shape_is_null(shape):
+        return None
+
+    existing = _first_valid_topology(shape, "TopAbs_SOLID")
+    if existing is not None:
+        return existing
+
+    try:
+        from OCC.Core.BRepBuilderAPI import BRepBuilderAPI_MakeSolid
+        from OCC.Core.TopAbs import TopAbs_SHELL
+        from OCC.Core.TopExp import TopExp_Explorer
+        from OCC.Core.TopoDS import topods
+    except Exception:
+        return None
+
+    explorer = TopExp_Explorer(shape, TopAbs_SHELL)
+    while explorer.More():
+        shell = explorer.Current()
+        try:
+            shell = topods.Shell(shell)
+        except Exception:
+            pass
+        try:
+            maker = BRepBuilderAPI_MakeSolid(shell)
+            solid = maker.Solid()
+        except Exception:
+            explorer.Next()
+            continue
+        if _is_valid_solid(solid):
+            return solid
+        explorer.Next()
+    return None
+
+
+def _first_valid_topology(shape: object, top_abs_name: str) -> object | None:
+    try:
+        import OCC.Core.TopAbs as top_abs
+        from OCC.Core.TopExp import TopExp_Explorer
+
+        explorer = TopExp_Explorer(shape, getattr(top_abs, top_abs_name))
+    except Exception:
+        return None
+
+    while explorer.More():
+        current = explorer.Current()
+        if _is_valid_solid(current):
+            return current
+        explorer.Next()
+    return None
+
+
+def _is_valid_solid(shape: object) -> bool:
+    if _shape_is_null(shape):
+        return False
+    try:
+        from OCC.Core.BRepCheck import BRepCheck_Analyzer
+
+        return bool(BRepCheck_Analyzer(shape).IsValid())
+    except Exception:
+        return True
 
 
 def scan_iges_entity_summary(path: str | Path) -> IgesEntitySummary:
