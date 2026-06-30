@@ -41,6 +41,10 @@ hiddenimports = [
     "OCC.Core.TopoDS",
     "OCC.Display.backend",
     "OCC.Display.qtDisplay",
+    "pythoncom",
+    "pywintypes",
+    "win32com",
+    "win32com.client",
 ]
 
 for package_name in ("OCC",):

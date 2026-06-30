@@ -124,6 +124,12 @@ class RoundTubeLoopAnalysis:
 
 
 @dataclass(slots=True)
+class ShellOpenBoundaryAnalysis:
+    cut_edges: tuple[EdgeRecord, ...] = ()
+    pierce_count: int = 0
+
+
+@dataclass(slots=True)
 class EdgeGroups:
     calculated_cut_edges: tuple[EdgeRecord, ...] = ()
     auxiliary_unfold_edges: tuple[EdgeRecord, ...] = ()
@@ -141,6 +147,8 @@ class EdgeClassificationResult:
     thickness_faces: tuple[ThicknessFaceRecord, ...] = ()
     wall_thickness_mm: float = 0.0
     cut_length_override_mm: float | None = None
+    cut_end_length_override_mm: float | None = None
+    cut_feature_length_override_mm: float | None = None
     pierce_count_override: int | None = None
     warnings: tuple[str, ...] = ()
     calculated_cut_edges: tuple[EdgeRecord, ...] = ()
@@ -207,10 +215,14 @@ class EdgeClassificationResult:
 
     @property
     def cut_feature_length_mm(self) -> float:
+        if self.cut_feature_length_override_mm is not None:
+            return self.cut_feature_length_override_mm
         return sum(edge.length_mm for edge in self.cut_feature_edges)
 
     @property
     def cut_end_length_mm(self) -> float:
+        if self.cut_end_length_override_mm is not None:
+            return self.cut_end_length_override_mm
         return sum(edge.length_mm for edge in self.cut_end_edges)
 
     @property
@@ -340,11 +352,24 @@ def classify_cut_edges(
         has_outer_faces=outer_face_count > 0,
         tolerance=tolerance,
     )
+    shell_open_boundary_analysis = _analyze_shell_open_boundary_fallback(
+        edge_records,
+        base_cut_edges=cut_face_analysis.cut_edges,
+        base_pierce_count=cut_face_analysis.pierce_count,
+        axis=axis,
+        length_mm=length_mm,
+        tolerance=tolerance,
+    )
     use_round_loop_analysis = bool(round_loop_analysis.cut_edges)
     use_cut_face_analysis = bool(cut_face_analysis.cut_edges)
     use_round_bspline_bbox_fallback = bool(round_bspline_bbox_analysis.cut_edges)
     use_rotated_profile_fallback = bool(rotated_profile_fallback_analysis.cut_edges)
     use_round_edge_fallback = bool(round_edge_fallback_analysis.cut_edges)
+    use_shell_open_boundary_fallback = (
+        bool(shell_open_boundary_analysis.cut_edges)
+        and shell_open_boundary_analysis.pierce_count
+        >= max(cut_face_analysis.pierce_count + 3, 4)
+    )
     if use_round_loop_analysis:
         _suppress_legacy_cut_edges(
             edge_records,
@@ -373,12 +398,40 @@ def classify_cut_edges(
             global_bounds=global_bounds,
             tolerance=tolerance,
         )
+        shell_open_boundary_analysis = _analyze_shell_open_boundary_fallback(
+            edge_records,
+            base_cut_edges=cut_face_analysis.cut_edges,
+            base_pierce_count=cut_face_analysis.pierce_count,
+            axis=axis,
+            length_mm=length_mm,
+            tolerance=tolerance,
+        )
+        use_shell_open_boundary_fallback = (
+            bool(shell_open_boundary_analysis.cut_edges)
+            and shell_open_boundary_analysis.pierce_count
+            >= max(cut_face_analysis.pierce_count + 3, 4)
+        )
+        if use_shell_open_boundary_fallback:
+            _suppress_legacy_cut_edges(
+                edge_records,
+                selected_cut_edges=shell_open_boundary_analysis.cut_edges,
+            )
+            groups = _groups_from_edge_records(edge_records)
+            cut_edges = shell_open_boundary_analysis.cut_edges
+        else:
+            _suppress_legacy_cut_edges(
+                edge_records,
+                selected_cut_edges=cut_face_analysis.cut_edges,
+            )
+            groups = _groups_from_edge_records(edge_records)
+            cut_edges = cut_face_analysis.cut_edges
+    elif use_shell_open_boundary_fallback:
         _suppress_legacy_cut_edges(
             edge_records,
-            selected_cut_edges=cut_face_analysis.cut_edges,
+            selected_cut_edges=shell_open_boundary_analysis.cut_edges,
         )
         groups = _groups_from_edge_records(edge_records)
-        cut_edges = cut_face_analysis.cut_edges
+        cut_edges = shell_open_boundary_analysis.cut_edges
     elif use_rotated_profile_fallback:
         _suppress_legacy_cut_edges(
             edge_records,
@@ -403,6 +456,8 @@ def classify_cut_edges(
         )
 
     cut_length_override_mm = sum(edge.length_mm for edge in cut_edges)
+    cut_end_length_override_mm: float | None = None
+    cut_feature_length_override_mm: float | None = None
     if use_round_loop_analysis:
         pierce_count_override = round_loop_analysis.pierce_count
         warnings.append(
@@ -416,10 +471,23 @@ def classify_cut_edges(
             "наружному bbox-контуру трубы, внутренние кромки толщины не суммируются."
         )
     elif use_cut_face_analysis:
-        pierce_count_override = cut_face_analysis.pierce_count
+        if use_shell_open_boundary_fallback:
+            pierce_count_override = shell_open_boundary_analysis.pierce_count
+            warnings.append(
+                "IGES импортирован как shell без надежного solid; врезки рассчитаны "
+                "по открытым наружным границам оболочки, длина будет уточнена по площади граней реза."
+            )
+        else:
+            pierce_count_override = cut_face_analysis.pierce_count
+            warnings.append(
+                "Длина реза рассчитана по наружным границам граней стенки реза; "
+                "внутренние кромки толщины и разбиение CAD-граней не суммируются."
+            )
+    elif use_shell_open_boundary_fallback:
+        pierce_count_override = shell_open_boundary_analysis.pierce_count
         warnings.append(
-            "Длина реза рассчитана по наружным границам граней стенки реза; "
-            "внутренние кромки толщины и разбиение CAD-граней не суммируются."
+            "IGES импортирован как shell без надежного solid; врезки рассчитаны "
+            "по открытым наружным границам оболочки, длина будет уточнена по площади граней реза."
         )
     elif use_rotated_profile_fallback:
         pierce_count_override = rotated_profile_fallback_analysis.pierce_count
@@ -455,6 +523,11 @@ def classify_cut_edges(
         tolerance=tolerance,
         manual_wall_thickness_mm=manual_wall_thickness_mm,
     )
+    shell_area_length_override_mm = (
+        _shell_area_cut_length(thickness_faces, tolerance=tolerance)
+        if use_shell_open_boundary_fallback
+        else 0.0
+    )
     wall_thickness_mm = thickness_estimate.thickness_mm
     if wall_thickness_mm > tolerance:
         for face in thickness_faces:
@@ -469,6 +542,17 @@ def classify_cut_edges(
         warnings.append(
             "Толщина трубы определена с невысокой уверенностью; при необходимости задайте ее вручную."
         )
+    if use_shell_open_boundary_fallback:
+        shell_area_length = shell_area_length_override_mm
+        if shell_area_length > tolerance:
+            cut_length_override_mm = shell_area_length
+            cut_end_length_override_mm = sum(
+                edge.length_mm for edge in cut_edges if edge.edge_type == CUT_END
+            )
+            cut_feature_length_override_mm = max(
+                0.0,
+                shell_area_length - cut_end_length_override_mm,
+            )
 
     warnings.append(
         "Длина реза считается только по ребрам CUT_FEATURE и CUT_END; "
@@ -482,6 +566,8 @@ def classify_cut_edges(
         thickness_faces=thickness_faces,
         wall_thickness_mm=wall_thickness_mm,
         cut_length_override_mm=cut_length_override_mm,
+        cut_end_length_override_mm=cut_end_length_override_mm,
+        cut_feature_length_override_mm=cut_feature_length_override_mm,
         pierce_count_override=pierce_count_override,
         warnings=tuple(warnings),
         calculated_cut_edges=cut_edges,
@@ -650,7 +736,18 @@ def _is_thickness_face_candidate(
         tolerance=tolerance,
     ):
         return False
-    return any(_edge_touches_outer_face(edge, face_record) for edge in face_edges)
+    if any(_edge_touches_outer_face(edge, face_record) for edge in face_edges):
+        return True
+    return any(
+        _is_unlabeled_stitched_outer_cut_edge(
+            edge,
+            shared_thickness_edges=(),
+            axis=axis,
+            length_mm=length_mm,
+            tolerance=tolerance,
+        )
+        for edge in face_edges
+    )
 
 
 def _edge_has_face(edge: EdgeRecord, face_record: FaceRecord) -> bool:
@@ -2124,6 +2221,7 @@ def _analyze_cut_faces(
     # two. We therefore compute components first, then keep only the faces that
     # actually contribute an outer cut edge.
     component_ids = _thickness_face_component_ids(records, tolerance=tolerance)
+    shared_thickness_edges = _shared_thickness_edges(records)
 
     selected_records: list[ThicknessFaceRecord] = []
     selected_components: list[int] = []
@@ -2135,6 +2233,7 @@ def _analyze_cut_faces(
             axis=axis,
             length_mm=length_mm,
             tolerance=tolerance,
+            shared_thickness_edges=shared_thickness_edges,
         )
         if not outer_edges:
             continue
@@ -2333,6 +2432,174 @@ def _remove_rectangular_profile_end_marker_holes(
     )
 
 
+def _analyze_shell_open_boundary_fallback(
+    edge_records: Iterable[EdgeRecord],
+    *,
+    base_cut_edges: tuple[EdgeRecord, ...],
+    base_pierce_count: int,
+    axis: str,
+    length_mm: float,
+    tolerance: float,
+) -> ShellOpenBoundaryAnalysis:
+    candidates = tuple(
+        edge
+        for edge in edge_records
+        if _is_shell_open_boundary_cut_candidate(
+            edge,
+            axis=axis,
+            length_mm=length_mm,
+            tolerance=tolerance,
+        )
+    )
+    if not candidates:
+        return ShellOpenBoundaryAnalysis()
+
+    raw_components = _edge_components_by_touch(
+        candidates,
+        tolerance=max(tolerance, 0.2),
+    )
+    merged_components = _merge_near_edge_components(
+        raw_components,
+        tolerance=max(tolerance * 5.0, 0.5),
+    )
+    if not merged_components:
+        return ShellOpenBoundaryAnalysis()
+
+    selected: list[EdgeRecord] = list(base_cut_edges)
+    next_component_id = max(base_pierce_count, 0) + 1
+    for component in merged_components:
+        for edge in component:
+            existing = _find_same_edge(selected, edge.edge)
+            if existing is not None:
+                continue
+            edge.edge_type = CUT_FEATURE
+            edge.reason = "CUT_FEATURE shell open boundary fallback"
+            edge.cut_component_id = next_component_id
+            selected.append(edge)
+        next_component_id += 1
+
+    return ShellOpenBoundaryAnalysis(
+        cut_edges=tuple(selected),
+        pierce_count=max(base_pierce_count, 0) + len(merged_components),
+    )
+
+
+def _is_shell_open_boundary_cut_candidate(
+    edge: EdgeRecord,
+    *,
+    axis: str,
+    length_mm: float,
+    tolerance: float,
+) -> bool:
+    if edge.bounds is None:
+        return False
+    if edge.length_mm <= tolerance:
+        return False
+    if edge.wire_roles:
+        return False
+    if edge.adjacent_face_count != 1:
+        return False
+    if _looks_like_longitudinal_seam(edge, axis=axis, length_mm=length_mm):
+        return False
+    axis_span = edge.bounds.sizes[AXIS_INDEX[axis]]
+    if axis_span >= max(length_mm * 0.60, tolerance * 4.0):
+        return False
+    return True
+
+
+def _edge_components_by_touch(
+    edges: tuple[EdgeRecord, ...],
+    *,
+    tolerance: float,
+) -> tuple[tuple[EdgeRecord, ...], ...]:
+    if not edges:
+        return ()
+    parent = list(range(len(edges)))
+    for first_index, first in enumerate(edges):
+        for second_index in range(first_index + 1, len(edges)):
+            if _edge_endpoints_touch(first, edges[second_index], tolerance=tolerance):
+                _union_component(parent, first_index, second_index)
+
+    components: dict[int, list[EdgeRecord]] = {}
+    for index, edge in enumerate(edges):
+        components.setdefault(_find_component(parent, index), []).append(edge)
+    return tuple(tuple(component) for component in components.values())
+
+
+def _merge_near_edge_components(
+    components: tuple[tuple[EdgeRecord, ...], ...],
+    *,
+    tolerance: float,
+) -> tuple[tuple[EdgeRecord, ...], ...]:
+    if not components:
+        return ()
+    parent = list(range(len(components)))
+    bounds = tuple(_combined_edge_bounds(component) for component in components)
+    for first_index, first_bounds in enumerate(bounds):
+        if first_bounds is None:
+            continue
+        for second_index in range(first_index + 1, len(bounds)):
+            second_bounds = bounds[second_index]
+            if second_bounds is None:
+                continue
+            if _bounds_gap(first_bounds, second_bounds) <= tolerance:
+                _union_component(parent, first_index, second_index)
+
+    merged: dict[int, list[EdgeRecord]] = {}
+    for index, component in enumerate(components):
+        merged.setdefault(_find_component(parent, index), []).extend(component)
+    return tuple(tuple(component) for component in merged.values())
+
+
+def _find_component(parent: list[int], index: int) -> int:
+    while parent[index] != index:
+        parent[index] = parent[parent[index]]
+        index = parent[index]
+    return index
+
+
+def _union_component(parent: list[int], first: int, second: int) -> None:
+    first_root = _find_component(parent, first)
+    second_root = _find_component(parent, second)
+    if first_root != second_root:
+        parent[second_root] = first_root
+
+
+def _bounds_gap(first: Bounds, second: Bounds) -> float:
+    gap = 0.0
+    for index in range(3):
+        if first.maxes[index] < second.mins[index]:
+            gap = max(gap, second.mins[index] - first.maxes[index])
+        elif second.maxes[index] < first.mins[index]:
+            gap = max(gap, first.mins[index] - second.maxes[index])
+    return gap
+
+
+def _shell_area_cut_length(
+    records: tuple[ThicknessFaceRecord, ...],
+    *,
+    tolerance: float,
+) -> float:
+    if not records:
+        return 0.0
+    component_ids = _thickness_face_component_ids(records, tolerance=tolerance)
+    component_lengths: dict[int, float] = {}
+    for index, record in enumerate(records):
+        component_id = component_ids.get(index, 0)
+        component_lengths[component_id] = component_lengths.get(component_id, 0.0) + max(
+            0.0,
+            record.cut_length_mm,
+        )
+    lengths = [length for length in component_lengths.values() if length > tolerance]
+    if not lengths:
+        return 0.0
+    total = sum(lengths)
+    largest = max(lengths)
+    if largest >= total * 0.75:
+        return largest
+    return total
+
+
 def _renumber_cut_components(edges: tuple[EdgeRecord, ...]) -> int:
     old_to_new: dict[int, int] = {}
     for edge in edges:
@@ -2422,12 +2689,26 @@ def _outer_cut_edges_for_thickness_face(
     axis: str,
     length_mm: float,
     tolerance: float,
+    shared_thickness_edges: tuple[object, ...] = (),
 ) -> tuple[EdgeRecord, ...]:
     edges: list[EdgeRecord] = []
+    has_detected_outer_edge = any(
+        _edge_touches_outer_face(edge, record.face) for edge in record.edges
+    )
     for edge in record.edges:
         if edge.length_mm <= tolerance:
             continue
-        if not _edge_touches_outer_face(edge, record.face):
+        touches_outer = _edge_touches_outer_face(edge, record.face)
+        if not touches_outer and (
+            has_detected_outer_edge
+            or not _is_unlabeled_stitched_outer_cut_edge(
+                edge,
+                shared_thickness_edges=shared_thickness_edges,
+                axis=axis,
+                length_mm=length_mm,
+                tolerance=tolerance,
+            )
+        ):
             continue
         if _looks_like_longitudinal_seam(edge, axis=axis, length_mm=length_mm):
             continue
@@ -2435,6 +2716,32 @@ def _outer_cut_edges_for_thickness_face(
             continue
         edges.append(edge)
     return tuple(edges)
+
+
+def _is_unlabeled_stitched_outer_cut_edge(
+    edge: EdgeRecord,
+    *,
+    shared_thickness_edges: tuple[object, ...],
+    axis: str,
+    length_mm: float,
+    tolerance: float,
+) -> bool:
+    if edge.bounds is None:
+        return False
+    if edge.wire_roles:
+        return False
+    if edge.adjacent_face_count < 2:
+        return False
+    if edge.outer_face_count > 0:
+        return False
+    if _contains_same_shape(shared_thickness_edges, edge.edge):
+        return False
+    if _looks_like_longitudinal_seam(edge, axis=axis, length_mm=length_mm):
+        return False
+    axis_span = edge.bounds.sizes[AXIS_INDEX[axis]]
+    if axis_span >= max(length_mm * 0.60, tolerance * 4.0):
+        return False
+    return True
 
 
 def _classify_cut_face_edge(
@@ -2828,6 +3135,24 @@ def _thickness_faces_touch(
             if _edge_endpoints_touch(first_edge, second_edge, tolerance=tolerance):
                 return True
     return False
+
+
+def _shared_thickness_edges(records: tuple[ThicknessFaceRecord, ...]) -> tuple[object, ...]:
+    shared_edges: list[object] = []
+    for first_index, first in enumerate(records):
+        for second in records[first_index + 1 :]:
+            for first_edge in first.edges:
+                for second_edge in second.edges:
+                    if not _is_same_shape(first_edge.edge, second_edge.edge):
+                        continue
+                    if _contains_same_shape(shared_edges, first_edge.edge):
+                        continue
+                    shared_edges.append(first_edge.edge)
+    return tuple(shared_edges)
+
+
+def _contains_same_shape(shapes: Iterable[object], shape: object) -> bool:
+    return any(_is_same_shape(candidate, shape) for candidate in shapes)
 
 
 def _edge_endpoints_touch(

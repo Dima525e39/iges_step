@@ -24,6 +24,7 @@ from cad.edge_classifier import (
     _analyze_round_tube_bspline_bbox_fallback,
     _analyze_round_tube_edge_fallback,
     _analyze_round_tube_outer_loops,
+    _analyze_shell_open_boundary_fallback,
     _classify_edge_groups,
     _collect_thickness_outer_cut_edges,
     _count_cut_edge_components,
@@ -47,6 +48,7 @@ from cad.importer import (
     _sew_iges_shape,
     scan_iges_entity_summary,
 )
+from cad.inventor_converter import InventorConversionError, convert_iges_to_step
 from cad.pierce_counter import _count_components_from_pairs
 from cad.profile_detector import detect_profile_from_dimensions
 from cad.shape_summary import ShapeSummary
@@ -549,6 +551,16 @@ class CadImporterTests(unittest.TestCase):
                     sys.modules[name] = original
 
         self.assertIs(result._marker, sewed_marker)
+
+    def test_inventor_converter_rejects_non_iges_files(self) -> None:
+        from tempfile import TemporaryDirectory
+
+        with TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "part.step"
+            path.write_text("", encoding="utf-8")
+
+            with self.assertRaises(InventorConversionError):
+                convert_iges_to_step(path, temp_dir)
 
     def test_count_topology_imports_top_exp_explorer_in_helper_scope(self) -> None:
         from cad.shape_summary import _count_topology
@@ -2339,6 +2351,102 @@ END-ISO-10303-21;
         self.assertEqual(analysis.pierce_count, 1)
         self.assertEqual({edge.edge_type for edge in analysis.cut_edges}, {CUT_FEATURE})
         self.assertEqual({edge.cut_component_id for edge in analysis.cut_edges}, {1})
+
+    def test_cut_face_analysis_uses_unlabeled_stitched_brep_boundary(self) -> None:
+        stitched_outer_face = FaceRecord(
+            face=object(),
+            bounds=Bounds(0.0, 0.0, 0.0, 80.0, 0.0, 1000.0),
+            is_outer_longitudinal=False,
+        )
+        inner_face = FaceRecord(
+            face=object(),
+            bounds=Bounds(3.0, 3.0, 0.0, 77.0, 37.0, 1000.0),
+            is_outer_longitudinal=False,
+        )
+        thickness_face = FaceRecord(
+            face=object(),
+            bounds=Bounds(20.0, 0.0, 300.0, 50.0, 3.0, 330.0),
+            is_outer_longitudinal=False,
+        )
+        stitched_outer_edge = EdgeRecord(
+            edge=object(),
+            length_mm=30.0,
+            bounds=Bounds(20.0, 0.0, 300.0, 50.0, 0.0, 300.0),
+            faces=[stitched_outer_face, thickness_face],
+        )
+        inner_edge = EdgeRecord(
+            edge=object(),
+            length_mm=24.0,
+            bounds=Bounds(23.0, 3.0, 303.0, 47.0, 3.0, 303.0),
+            faces=[inner_face, thickness_face],
+            wire_roles={"inner_wire"},
+        )
+        record = ThicknessFaceRecord(
+            face=thickness_face,
+            area_mm2=90.0,
+            thickness_mm=3.0,
+            cut_length_mm=30.0,
+            edges=(stitched_outer_edge, inner_edge),
+        )
+
+        analysis = _analyze_cut_faces(
+            (record,),
+            axis="Z",
+            length_mm=1000.0,
+            global_bounds=Bounds(0.0, 0.0, 0.0, 80.0, 40.0, 1000.0),
+            tolerance=0.01,
+        )
+
+        self.assertEqual(analysis.cut_edges, (stitched_outer_edge,))
+        self.assertEqual(analysis.pierce_count, 1)
+        self.assertEqual(stitched_outer_edge.edge_type, CUT_FEATURE)
+
+    def test_shell_open_boundary_fallback_counts_merged_boundary_components(self) -> None:
+        base_end = EdgeRecord(
+            edge=object(),
+            length_mm=88.0,
+            bounds=Bounds(0.0, 0.0, 0.0, 88.0, 0.0, 0.0),
+            edge_type=CUT_END,
+            cut_component_id=1,
+        )
+        first = EdgeRecord(
+            edge=object(),
+            length_mm=10.0,
+            bounds=Bounds(0.0, 0.0, 100.0, 10.0, 0.0, 100.0),
+            start_point=(0.0, 0.0, 100.0),
+            end_point=(10.0, 0.0, 100.0),
+            faces=[FaceRecord(object(), Bounds(0.0, 0.0, 100.0, 10.0, 0.0, 100.0), False)],
+        )
+        near_duplicate_side = EdgeRecord(
+            edge=object(),
+            length_mm=10.0,
+            bounds=Bounds(0.0, 0.4, 100.0, 10.0, 0.4, 100.0),
+            start_point=(0.0, 0.4, 100.0),
+            end_point=(10.0, 0.4, 100.0),
+            faces=[FaceRecord(object(), Bounds(0.0, 0.4, 100.0, 10.0, 0.4, 100.0), False)],
+        )
+        separate = EdgeRecord(
+            edge=object(),
+            length_mm=12.0,
+            bounds=Bounds(30.0, 0.0, 300.0, 42.0, 0.0, 300.0),
+            start_point=(30.0, 0.0, 300.0),
+            end_point=(42.0, 0.0, 300.0),
+            faces=[FaceRecord(object(), Bounds(30.0, 0.0, 300.0, 42.0, 0.0, 300.0), False)],
+        )
+
+        analysis = _analyze_shell_open_boundary_fallback(
+            (base_end, first, near_duplicate_side, separate),
+            base_cut_edges=(base_end,),
+            base_pierce_count=1,
+            axis="Z",
+            length_mm=1000.0,
+            tolerance=0.01,
+        )
+
+        self.assertEqual(analysis.pierce_count, 3)
+        self.assertEqual(analysis.cut_edges, (base_end, first, near_duplicate_side, separate))
+        self.assertEqual(first.cut_component_id, near_duplicate_side.cut_component_id)
+        self.assertNotEqual(first.cut_component_id, separate.cut_component_id)
 
     def test_three_plane_cut_with_internal_middle_face_is_one_pierce(self) -> None:
         # A 3-plane notch where the middle (bottom) plane never reaches the

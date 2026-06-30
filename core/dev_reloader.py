@@ -14,6 +14,7 @@ CALCULATION_MODULES = (
     "cad.debug_edges",
     "cad.step_text_analyzer",
     "cad.dxf_reader",
+    "cad.inventor_converter",
     "cad.importer",
     "cad.edge_classifier",
     "cad.pierce_counter",

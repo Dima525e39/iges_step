@@ -280,9 +280,12 @@ class MainWindow(QMainWindow):
         self.debug_edges_checkbox = QCheckBox("debug_edges.csv")
         self.rebuild_iges_solid_button = QPushButton("Точный IGES: собрать solid")
         self.rebuild_iges_solid_button.setEnabled(False)
+        self.inventor_iges_button = QPushButton("IGES через Inventor")
+        self.inventor_iges_button.setEnabled(False)
         geometry_layout.addRow(self.manual_thickness_checkbox, self.manual_thickness_input)
         geometry_layout.addRow(self.debug_edges_checkbox)
         geometry_layout.addRow(self.rebuild_iges_solid_button)
+        geometry_layout.addRow(self.inventor_iges_button)
         layout.addWidget(geometry_group)
 
         pricing_group = QGroupBox("Стоимость")
@@ -396,6 +399,7 @@ class MainWindow(QMainWindow):
         self.tabs.currentChanged.connect(self._on_tab_changed)
         self.geometry_debug_button.clicked.connect(self._open_geometry_debugger)
         self.rebuild_iges_solid_button.clicked.connect(self._rebuild_selected_iges_solid)
+        self.inventor_iges_button.clicked.connect(self._process_selected_iges_with_inventor)
         self.manual_thickness_checkbox.toggled.connect(self.manual_thickness_input.setEnabled)
 
     def _choose_files(self) -> None:
@@ -500,6 +504,32 @@ class MainWindow(QMainWindow):
             return
 
         self._start_import([job.normalized_path], force_iges_solid_healing=True)
+
+    def _process_selected_iges_with_inventor(self) -> None:
+        job = self._current_job()
+        if job is None:
+            QMessageBox.information(self, "IGES через Inventor", "Выберите IGES-файл в списке.")
+            return
+        if not self._job_is_iges(job):
+            QMessageBox.information(
+                self,
+                "IGES через Inventor",
+                "Конвертация через Inventor доступна только для IGES / IGS.",
+            )
+            return
+
+        answer = QMessageBox.question(
+            self,
+            "IGES через Inventor",
+            "Программа попробует открыть IGES в Autodesk Inventor, "
+            "сохранить временный STEP и рассчитать уже STEP-модель.\n\n"
+            "Inventor должен быть установлен на этом Windows-компьютере.\n\n"
+            f"Запустить для файла {job.name}?",
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+
+        self._start_import([job.normalized_path], use_inventor_iges_conversion=True)
 
     def _process_all(self) -> None:
         if len(self.queue) == 0:
@@ -698,6 +728,7 @@ class MainWindow(QMainWindow):
         paths: list[str],
         *,
         force_iges_solid_healing: bool = False,
+        use_inventor_iges_conversion: bool = False,
     ) -> None:
         if self.import_thread is not None:
             QMessageBox.information(self, "Импорт", "Импорт уже выполняется.")
@@ -749,6 +780,7 @@ class MainWindow(QMainWindow):
             manual_wall_thickness_mm=manual_thickness,
             debug_edges_enabled=self.debug_edges_checkbox.isChecked(),
             force_iges_solid_healing=force_iges_solid_healing,
+            use_inventor_iges_conversion=use_inventor_iges_conversion,
         )
         self.import_worker.moveToThread(self.import_thread)
         self.import_thread.started.connect(self.import_worker.run)
@@ -825,6 +857,7 @@ class MainWindow(QMainWindow):
         self.export_svg_button.setEnabled(enabled)
         self.nesting_button.setEnabled(enabled)
         self.rebuild_iges_solid_button.setEnabled(enabled and self._current_job_is_iges())
+        self.inventor_iges_button.setEnabled(enabled and self._current_job_is_iges())
 
     def _apply_analysis_to_job(
         self,
@@ -952,8 +985,14 @@ class MainWindow(QMainWindow):
         elif "круг" in profile and "квадрат" not in profile:
             base = f"Ø{max(width, height):.1f}"
         else:
-            base = f"{width:.1f}×{height:.1f}"
+            base = f"{self._format_tube_dimension(width)}×{self._format_tube_dimension(height)}"
         return base
+
+    def _format_tube_dimension(self, value: float) -> str:
+        rounded = round(value)
+        if abs(value - rounded) <= 0.25:
+            return f"{rounded:.0f}"
+        return f"{value:.1f}"
 
     def _update_job_price(self, job: FileJob, analysis: object) -> None:
         cut_length = float(getattr(analysis, "cut_length_mm", 0.0) or 0.0)
@@ -1326,6 +1365,9 @@ class MainWindow(QMainWindow):
         self._show_selected_preview(job, force=False)
         self.geometry_debug_button.setEnabled(shape is not None)
         self.rebuild_iges_solid_button.setEnabled(
+            self.import_thread is None and self._job_is_iges(job)
+        )
+        self.inventor_iges_button.setEnabled(
             self.import_thread is None and self._job_is_iges(job)
         )
         if self.geometry_debug_dialog is not None:
