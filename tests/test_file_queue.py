@@ -10,13 +10,16 @@ from cad.edge_classifier import (
     Bounds,
     CUT_END,
     CUT_FEATURE,
+    CutFaceAnalysis,
     IGNORED_LONGITUDINAL,
     IGNORED_PLANE_RADIUS,
     IGNORED_PROFILE,
+    UNCERTAIN,
     EdgeRecord,
     EdgeClassificationResult,
     FaceRecord,
     ThicknessFaceRecord,
+    _add_diagonal_profile_side_holes,
     _analyze_cut_faces,
     _analyze_round_tube_bspline_bbox_fallback,
     _analyze_round_tube_edge_fallback,
@@ -1171,6 +1174,73 @@ class GeometryAnalyzerTests(unittest.TestCase):
 
         self.assertEqual(analysis.cut_edges, ())
         self.assertEqual(analysis.pierce_count, 0)
+
+    def test_diagonal_profile_side_hole_fallback_adds_missing_pierces(self) -> None:
+        base_edges = tuple(
+            EdgeRecord(
+                object(),
+                15.71,
+                bounds=Bounds(float(index), 900.0, 0.0, float(index) + 1.0, 901.0, 0.0),
+                edge_type=CUT_FEATURE,
+                cut_component_id=index + 1,
+            )
+            for index in range(8)
+        )
+
+        def loop_edges(name: str, cx: float, cy: float, cz: float, z_span: float) -> tuple[EdgeRecord, ...]:
+            vertices = [FakeVertex(f"{name}-{index}") for index in range(4)]
+            bounds = Bounds(cx - 2.8, cy - 2.8, cz - z_span / 2.0, cx + 2.8, cy + 2.8, cz + z_span / 2.0)
+            return tuple(
+                EdgeRecord(
+                    object(),
+                    9.354,
+                    bounds=bounds,
+                    start_vertex=vertices[index],
+                    end_vertex=vertices[(index + 1) % 4],
+                    wire_roles={"inner_wire", "outer_wire_cut"},
+                    edge_type=UNCERTAIN,
+                    reason="edge is not on outer tube shell",
+                )
+                for index in range(4)
+            )
+
+        side_holes = tuple(
+            edge
+            for component in (
+                loop_edges("side-1", 44.65, 1188.23, -30.0, 5.0),
+                loop_edges("side-2", 108.29, 1124.59, -30.0, 5.0),
+                loop_edges("side-3", 179.59, 1053.29, -30.0, 5.0),
+                loop_edges("side-4", 243.23, 989.65, -30.0, 5.0),
+            )
+            for edge in component
+        )
+        inner_thickness_loops = loop_edges("inner-noise", 123.78, 1068.78, -57.0, 0.001)
+        large_end_noise = tuple(
+            EdgeRecord(
+                object(),
+                64.7,
+                bounds=Bounds(255.0, 895.14, -60.0, 315.0, 920.0, 0.0),
+                start_vertex=FakeVertex(f"large-{index}"),
+                end_vertex=FakeVertex(f"large-{(index + 1) % 4}"),
+                wire_roles={"outer_wire_cut"},
+                edge_type=UNCERTAIN,
+                reason="edge is not on outer tube shell",
+            )
+            for index in range(4)
+        )
+
+        analysis = _add_diagonal_profile_side_holes(
+            CutFaceAnalysis(cut_edges=base_edges, pierce_count=8),
+            (*base_edges, *side_holes, *inner_thickness_loops, *large_end_noise),
+            axis="Y",
+            global_bounds=Bounds(-51.610173, 893.389827, -60.0, 315.0, 1260.0, 0.0),
+            tolerance=0.01,
+        )
+
+        self.assertEqual(analysis.pierce_count, 12)
+        self.assertEqual(len(analysis.cut_edges), len(base_edges) + len(side_holes))
+        self.assertTrue(all(edge.edge_type == CUT_FEATURE for edge in side_holes))
+        self.assertTrue(all(edge.edge_type == UNCERTAIN for edge in inner_thickness_loops))
 
     def test_round_split_surface_tube_uses_half_cylinder_bbox(self) -> None:
         faces = (

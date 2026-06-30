@@ -281,12 +281,13 @@ def analyze_shape(
             length_axis=length_axis,
             manual_wall_thickness_mm=manual_wall_thickness_mm,
         )
-        pierce_estimate = count_edge_components(classification.cut_edges)
         cut_length_mm = classification.cut_length_mm
         cut_end_length_mm = classification.cut_end_length_mm
         cut_feature_length_mm = classification.cut_feature_length_mm
         pierce_count = classification.pierce_count
+        pierce_estimate = None
         if pierce_count is None:
+            pierce_estimate = count_edge_components(classification.cut_edges)
             pierce_count = pierce_estimate.pierce_count
         cut_edge_count = classification.cut_edge_count
         outer_face_count = classification.outer_face_count
@@ -340,7 +341,7 @@ def analyze_shape(
                 )
             except Exception as exc:
                 warnings.append(f"debug CSV не записан: {exc}")
-        if classification.pierce_count is None:
+        if classification.pierce_count is None and pierce_estimate is not None:
             warnings.extend(pierce_estimate.warnings)
         if cut_length_mm > 0.0:
             warnings.append(
@@ -466,6 +467,14 @@ def _profile_side_candidate_from_faces(
             continue
         sizes = sorted((size for size in bounds.sizes if size > 0.001))
         if len(sizes) < 3:
+            continue
+        near_known = [
+            size
+            for size in sizes
+            if known_side * 0.70 <= size <= known_side * 1.30
+        ]
+        if len(near_known) >= 2:
+            candidates.append(known_side)
             continue
         small, middle, large = sizes
         if small > max(known_side * 0.15, 8.0):

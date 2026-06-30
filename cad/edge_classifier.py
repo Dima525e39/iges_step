@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import math
 from typing import Iterable
 
 from cad.shape_summary import ShapeSummary, _add_shape_to_box
@@ -349,6 +350,19 @@ def classify_cut_edges(
         groups = _groups_from_edge_records(edge_records)
         cut_edges = round_bspline_bbox_analysis.cut_edges
     elif use_cut_face_analysis:
+        cut_face_analysis = _add_diagonal_profile_side_holes(
+            cut_face_analysis,
+            edge_records,
+            axis=axis,
+            global_bounds=global_bounds,
+            tolerance=tolerance,
+        )
+        cut_face_analysis = _remove_rectangular_profile_end_marker_holes(
+            cut_face_analysis,
+            axis=axis,
+            global_bounds=global_bounds,
+            tolerance=tolerance,
+        )
         _suppress_legacy_cut_edges(
             edge_records,
             selected_cut_edges=cut_face_analysis.cut_edges,
@@ -1938,6 +1952,246 @@ def _analyze_cut_faces(
     )
 
 
+def _add_diagonal_profile_side_holes(
+    analysis: CutFaceAnalysis,
+    edge_records: Iterable[EdgeRecord],
+    *,
+    axis: str,
+    global_bounds: Bounds,
+    tolerance: float,
+) -> CutFaceAnalysis:
+    if not analysis.cut_edges:
+        return analysis
+    if not _looks_like_diagonal_profile_bbox(
+        global_bounds,
+        axis=axis,
+        tolerance=tolerance,
+    ):
+        return analysis
+
+    selected_ids = {id(edge) for edge in analysis.cut_edges}
+    candidates = tuple(
+        edge
+        for edge in edge_records
+        if id(edge) not in selected_ids
+        and edge.edge_type == UNCERTAIN
+        and "outer_wire_cut" in edge.wire_roles
+        and edge.bounds is not None
+        and edge.length_mm > tolerance
+        and not _looks_like_longitudinal_seam(
+            edge,
+            axis=axis,
+            length_mm=global_bounds.sizes[AXIS_INDEX[axis]],
+        )
+    )
+    if not candidates:
+        return analysis
+
+    component_ids = _cut_edge_component_ids(
+        candidates,
+        axis=None,
+        global_bounds=None,
+        tolerance=max(tolerance, 0.05),
+    )
+    components: dict[int, list[EdgeRecord]] = {}
+    for index, component_id in component_ids.items():
+        components.setdefault(component_id, []).append(candidates[index])
+
+    profile_side = _diagonal_profile_side(global_bounds, tolerance=tolerance)
+    cross_axis = _smallest_non_length_axis(global_bounds, axis=axis, tolerance=tolerance)
+    extra_edges: list[EdgeRecord] = []
+    extra_count = 0
+    next_component_id = max(analysis.pierce_count, 0) + 1
+
+    for component_edges in components.values():
+        component = tuple(component_edges)
+        if not _is_diagonal_profile_side_hole_component(
+            component,
+            profile_side=profile_side,
+            cross_axis=cross_axis,
+            tolerance=tolerance,
+        ):
+            continue
+        for edge in component:
+            edge.edge_type = CUT_FEATURE
+            edge.reason = "CUT_FEATURE diagonal profile side-hole fallback"
+            edge.cut_component_id = next_component_id
+            extra_edges.append(edge)
+        extra_count += 1
+        next_component_id += 1
+
+    if not extra_edges:
+        return analysis
+
+    return CutFaceAnalysis(
+        cut_edges=(*analysis.cut_edges, *extra_edges),
+        cut_faces=analysis.cut_faces,
+        pierce_count=analysis.pierce_count + extra_count,
+        outer_radius_mm=analysis.outer_radius_mm,
+    )
+
+
+def _remove_rectangular_profile_end_marker_holes(
+    analysis: CutFaceAnalysis,
+    *,
+    axis: str,
+    global_bounds: Bounds,
+    tolerance: float,
+) -> CutFaceAnalysis:
+    if not analysis.cut_edges:
+        return analysis
+
+    axis_index = AXIS_INDEX[axis]
+    cross_indexes = [index for index in range(3) if index != axis_index]
+    if len(cross_indexes) != 2:
+        return analysis
+
+    first_cross, second_cross = cross_indexes
+    first_size = global_bounds.sizes[first_cross]
+    second_size = global_bounds.sizes[second_cross]
+    short_cross = first_cross if first_size <= second_size else second_cross
+    short_size = min(first_size, second_size)
+    long_size = max(first_size, second_size)
+    if short_size <= tolerance or long_size < short_size * 1.45:
+        return analysis
+
+    component_edges: dict[int, list[EdgeRecord]] = {}
+    for edge in analysis.cut_edges:
+        if edge.cut_component_id <= 0:
+            continue
+        component_edges.setdefault(edge.cut_component_id, []).append(edge)
+
+    remove_components: set[int] = set()
+    end_zone = max(short_size * 0.5, tolerance * 5.0)
+    max_marker_span = max(short_size * 0.12, tolerance * 5.0)
+    max_marker_length = max(short_size * 0.25, tolerance * 10.0)
+
+    for component_id, edges in component_edges.items():
+        component = tuple(edges)
+        if not component or any(edge.edge_type != CUT_FEATURE for edge in component):
+            continue
+        bounds = _combined_edge_bounds(component)
+        if bounds is None:
+            continue
+        side = _bounds_global_side(bounds, global_bounds=global_bounds, tolerance=max(tolerance * 5.0, 0.1))
+        if side != (short_cross, "max"):
+            continue
+        if max(bounds.sizes) > max_marker_span:
+            continue
+        if sum(edge.length_mm for edge in component) > max_marker_length:
+            continue
+        center = (bounds.mins[axis_index] + bounds.maxes[axis_index]) / 2.0
+        distance_to_end = min(
+            abs(center - global_bounds.mins[axis_index]),
+            abs(center - global_bounds.maxes[axis_index]),
+        )
+        if distance_to_end <= end_zone + max(tolerance * 10.0, 1.0):
+            remove_components.add(component_id)
+
+    if not remove_components:
+        return analysis
+
+    kept_edges: list[EdgeRecord] = []
+    for edge in analysis.cut_edges:
+        if edge.cut_component_id not in remove_components:
+            kept_edges.append(edge)
+            continue
+        edge.edge_type = UNCERTAIN
+        edge.reason = "ignored rectangular profile end-zone marker hole"
+        edge.cut_component_id = 0
+
+    pierce_count = _renumber_cut_components(tuple(kept_edges))
+    return CutFaceAnalysis(
+        cut_edges=tuple(kept_edges),
+        cut_faces=analysis.cut_faces,
+        pierce_count=pierce_count,
+        outer_radius_mm=analysis.outer_radius_mm,
+    )
+
+
+def _renumber_cut_components(edges: tuple[EdgeRecord, ...]) -> int:
+    old_to_new: dict[int, int] = {}
+    for edge in edges:
+        old_component = edge.cut_component_id
+        if old_component <= 0:
+            continue
+        if old_component not in old_to_new:
+            old_to_new[old_component] = len(old_to_new) + 1
+        edge.cut_component_id = old_to_new[old_component]
+    return len(old_to_new)
+
+
+def _looks_like_diagonal_profile_bbox(
+    global_bounds: Bounds,
+    *,
+    axis: str,
+    tolerance: float,
+) -> bool:
+    axis_index = AXIS_INDEX[axis]
+    sizes = [size for size in global_bounds.sizes if size > tolerance]
+    if len(sizes) < 3:
+        return False
+    ordered = sorted(sizes)
+    small, middle, large = ordered
+    if small <= tolerance or middle <= tolerance:
+        return False
+    if large / middle > 1.15:
+        return False
+    if small >= middle * 0.45:
+        return False
+    return global_bounds.sizes[axis_index] >= middle * 0.75
+
+
+def _diagonal_profile_side(global_bounds: Bounds, *, tolerance: float) -> float:
+    sizes = sorted(size for size in global_bounds.sizes if size > tolerance)
+    return sizes[0] if sizes else 0.0
+
+
+def _smallest_non_length_axis(
+    global_bounds: Bounds,
+    *,
+    axis: str,
+    tolerance: float,
+) -> int | None:
+    axis_index = AXIS_INDEX[axis]
+    candidates = [
+        (global_bounds.sizes[index], index)
+        for index in range(3)
+        if index != axis_index and global_bounds.sizes[index] > tolerance
+    ]
+    if not candidates:
+        return None
+    return min(candidates)[1]
+
+
+def _is_diagonal_profile_side_hole_component(
+    edges: tuple[EdgeRecord, ...],
+    *,
+    profile_side: float,
+    cross_axis: int | None,
+    tolerance: float,
+) -> bool:
+    if len(edges) < 3 or profile_side <= tolerance:
+        return False
+    if not any("inner_wire" in edge.wire_roles for edge in edges):
+        return False
+    bounds = _combined_edge_bounds(edges)
+    if bounds is None:
+        return False
+    sizes = bounds.sizes
+    max_span = max(sizes)
+    if max_span > max(profile_side * 0.45, tolerance * 5.0):
+        return False
+    if sum(edge.length_mm for edge in edges) > profile_side * 1.5:
+        return False
+    if cross_axis is not None and sizes[cross_axis] <= max(tolerance * 5.0, 0.5):
+        return False
+    meaningful_spans = sum(1 for size in sizes if size > max(tolerance * 5.0, 0.5))
+    if meaningful_spans < 2:
+        return False
+    return True
+
+
 def _outer_cut_edges_for_thickness_face(
     record: ThicknessFaceRecord,
     *,
@@ -1998,10 +2252,31 @@ def _thickness_face_component_ids(
         if first_root != second_root:
             parent[second_root] = first_root
 
-    for left_index, left in enumerate(records):
-        for right_index in range(left_index + 1, len(records)):
-            if _thickness_faces_touch(left, records[right_index], tolerance=tolerance):
-                union(left_index, right_index)
+    edge_to_record_indexes: dict[int, list[int]] = {}
+    point_to_record_indexes: dict[tuple[int, int, int], list[tuple[int, tuple[float, float, float]]]] = {}
+    bucket = max(float(tolerance), 1.0e-6)
+
+    for record_index, record in enumerate(records):
+        seen_edge_ids: set[int] = set()
+        seen_points: set[tuple[float, float, float]] = set()
+        for edge in record.edges:
+            edge_id = id(edge)
+            if edge_id not in seen_edge_ids:
+                for other_index in edge_to_record_indexes.get(edge_id, ()):
+                    union(record_index, other_index)
+                edge_to_record_indexes.setdefault(edge_id, []).append(record_index)
+                seen_edge_ids.add(edge_id)
+
+            for point in (edge.start_point, edge.end_point):
+                if point is None or point in seen_points:
+                    continue
+                cell = _point_grid_cell(point, bucket=bucket)
+                for neighbour in _neighbour_grid_cells(cell):
+                    for other_index, other_point in point_to_record_indexes.get(neighbour, ()):
+                        if _points_are_close(point, other_point, tolerance=tolerance):
+                            union(record_index, other_index)
+                point_to_record_indexes.setdefault(cell, []).append((record_index, point))
+                seen_points.add(point)
 
     root_to_component: dict[int, int] = {}
     component_ids: dict[int, int] = {}
@@ -2061,29 +2336,7 @@ def _count_thickness_face_components(
     *,
     tolerance: float,
 ) -> int:
-    if not records:
-        return 0
-
-    parent = list(range(len(records)))
-
-    def find(index: int) -> int:
-        while parent[index] != index:
-            parent[index] = parent[parent[index]]
-            index = parent[index]
-        return index
-
-    def union(first: int, second: int) -> None:
-        first_root = find(first)
-        second_root = find(second)
-        if first_root != second_root:
-            parent[second_root] = first_root
-
-    for left_index, left in enumerate(records):
-        for right_index in range(left_index + 1, len(records)):
-            if _thickness_faces_touch(left, records[right_index], tolerance=tolerance):
-                union(left_index, right_index)
-
-    return len({find(index) for index in range(len(records))})
+    return len(set(_thickness_face_component_ids(records, tolerance=tolerance).values()))
 
 
 def _collect_thickness_outer_cut_edges(
@@ -2872,6 +3125,24 @@ def _points_are_close(
         abs(first_value - second_value) <= tolerance
         for first_value, second_value in zip(first, second, strict=True)
     )
+
+
+def _point_grid_cell(
+    point: tuple[float, float, float],
+    *,
+    bucket: float,
+) -> tuple[int, int, int]:
+    return tuple(math.floor(value / bucket) for value in point)
+
+
+def _neighbour_grid_cells(
+    cell: tuple[int, int, int],
+) -> Iterable[tuple[int, int, int]]:
+    x, y, z = cell
+    for dx in (-1, 0, 1):
+        for dy in (-1, 0, 1):
+            for dz in (-1, 0, 1):
+                yield x + dx, y + dy, z + dz
 
 
 def _summary_axis_size(summary: ShapeSummary, axis: str) -> float:
