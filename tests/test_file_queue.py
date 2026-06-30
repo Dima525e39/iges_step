@@ -2448,6 +2448,39 @@ END-ISO-10303-21;
         self.assertEqual(first.cut_component_id, near_duplicate_side.cut_component_id)
         self.assertNotEqual(first.cut_component_id, separate.cut_component_id)
 
+    def test_shell_open_boundary_fallback_accepts_stitched_two_face_edges(self) -> None:
+        first_face = FaceRecord(
+            face=object(),
+            bounds=Bounds(0.0, 0.0, 100.0, 10.0, 0.0, 100.0),
+            is_outer_longitudinal=False,
+        )
+        second_face = FaceRecord(
+            face=object(),
+            bounds=Bounds(0.0, 0.0, 100.0, 10.0, 4.0, 100.0),
+            is_outer_longitudinal=False,
+        )
+        stitched_edge = EdgeRecord(
+            edge=object(),
+            length_mm=10.0,
+            bounds=Bounds(0.0, 0.0, 100.0, 10.0, 0.0, 100.0),
+            start_point=(0.0, 0.0, 100.0),
+            end_point=(10.0, 0.0, 100.0),
+            faces=[first_face, second_face],
+        )
+
+        analysis = _analyze_shell_open_boundary_fallback(
+            (stitched_edge,),
+            base_cut_edges=(),
+            base_pierce_count=0,
+            axis="Z",
+            length_mm=1000.0,
+            tolerance=0.01,
+        )
+
+        self.assertEqual(analysis.cut_edges, (stitched_edge,))
+        self.assertEqual(analysis.pierce_count, 1)
+        self.assertEqual(stitched_edge.edge_type, CUT_FEATURE)
+
     def test_three_plane_cut_with_internal_middle_face_is_one_pierce(self) -> None:
         # A 3-plane notch where the middle (bottom) plane never reaches the
         # outer skin. The two outer planes are connected only through that

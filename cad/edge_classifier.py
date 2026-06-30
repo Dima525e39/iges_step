@@ -2441,6 +2441,7 @@ def _analyze_shell_open_boundary_fallback(
     length_mm: float,
     tolerance: float,
 ) -> ShellOpenBoundaryAnalysis:
+    edge_records = tuple(edge_records)
     candidates = tuple(
         edge
         for edge in edge_records
@@ -2449,20 +2450,34 @@ def _analyze_shell_open_boundary_fallback(
             axis=axis,
             length_mm=length_mm,
             tolerance=tolerance,
+            include_stitched_edges=False,
         )
     )
-    if not candidates:
-        return ShellOpenBoundaryAnalysis()
-
-    raw_components = _edge_components_by_touch(
+    merged_components = _shell_open_boundary_components(
         candidates,
-        tolerance=max(tolerance, 0.2),
+        tolerance=tolerance,
     )
-    merged_components = _merge_near_edge_components(
-        raw_components,
-        tolerance=max(tolerance * 5.0, 0.5),
+
+    stitched_candidates = tuple(
+        edge
+        for edge in edge_records
+        if _is_shell_open_boundary_cut_candidate(
+            edge,
+            axis=axis,
+            length_mm=length_mm,
+            tolerance=tolerance,
+            include_stitched_edges=True,
+        )
+        and edge.adjacent_face_count == 2
     )
-    if not merged_components:
+    if stitched_candidates and len(merged_components) < max(12, int(base_pierce_count * 0.75)):
+        candidates = candidates + stitched_candidates
+        merged_components = _shell_open_boundary_components(
+            candidates,
+            tolerance=tolerance,
+        )
+
+    if not candidates or not merged_components:
         return ShellOpenBoundaryAnalysis()
 
     selected: list[EdgeRecord] = list(base_cut_edges)
@@ -2484,12 +2499,33 @@ def _analyze_shell_open_boundary_fallback(
     )
 
 
+def _shell_open_boundary_components(
+    candidates: tuple[EdgeRecord, ...],
+    *,
+    tolerance: float,
+) -> tuple[tuple[EdgeRecord, ...], ...]:
+    if not candidates:
+        return ()
+    raw_components = _edge_components_by_touch(
+        candidates,
+        tolerance=max(tolerance, 0.2),
+    )
+    merged_components = _merge_near_edge_components(
+        raw_components,
+        tolerance=max(tolerance * 5.0, 0.5),
+    )
+    if not merged_components:
+        return ()
+    return merged_components
+
+
 def _is_shell_open_boundary_cut_candidate(
     edge: EdgeRecord,
     *,
     axis: str,
     length_mm: float,
     tolerance: float,
+    include_stitched_edges: bool = False,
 ) -> bool:
     if edge.bounds is None:
         return False
@@ -2497,7 +2533,11 @@ def _is_shell_open_boundary_cut_candidate(
         return False
     if edge.wire_roles:
         return False
-    if edge.adjacent_face_count != 1:
+    if edge.adjacent_face_count == 2 and not include_stitched_edges:
+        return False
+    if edge.adjacent_face_count not in {1, 2}:
+        return False
+    if edge.outer_face_count > 0:
         return False
     if _looks_like_longitudinal_seam(edge, axis=axis, length_mm=length_mm):
         return False
