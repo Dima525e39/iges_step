@@ -1382,6 +1382,12 @@ def _analyze_round_tube_bspline_bbox_fallback(
     tolerance: float,
 ) -> CutFaceAnalysis:
     round_tolerance = _round_bbox_analysis_tolerance(tolerance)
+    if _has_profile_tube_outer_skin(
+        tuple(face_records),
+        axis=axis,
+        tolerance=round_tolerance,
+    ):
+        return CutFaceAnalysis()
     profile = _round_tube_bbox_profile(
         tuple(face_records),
         axis=axis,
@@ -1494,6 +1500,40 @@ def _analyze_round_tube_bspline_bbox_fallback(
         pierce_count=pierce_count,
         outer_radius_mm=outer_radius,
     )
+
+
+def _has_profile_tube_outer_skin(
+    face_records: tuple[FaceRecord, ...],
+    *,
+    axis: str,
+    tolerance: float,
+) -> bool:
+    axis_index = AXIS_INDEX[axis]
+    wall_like = [
+        face
+        for face in face_records
+        if face.is_outer_longitudinal
+        and face.bounds.sizes[axis_index] > tolerance
+    ]
+    if len(wall_like) < 4:
+        return False
+
+    flat_faces = 0
+    corner_faces = 0
+    for face in wall_like:
+        cross_sizes = [
+            face.bounds.sizes[index]
+            for index in range(3)
+            if index != axis_index
+        ]
+        cross_min = min(cross_sizes)
+        cross_max = max(cross_sizes)
+        if cross_min <= tolerance and cross_max > tolerance:
+            flat_faces += 1
+        elif cross_min > tolerance and cross_max / cross_min <= 1.5:
+            corner_faces += 1
+
+    return flat_faces >= 2 and flat_faces + corner_faces >= 4
 
 
 def _round_tube_bbox_profile(

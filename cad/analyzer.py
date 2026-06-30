@@ -298,6 +298,20 @@ def analyze_shape(
             profile_hint = "Круглая труба"
             width_mm = round_outer_diameter_mm
             height_mm = round_outer_diameter_mm
+        else:
+            refined_profile = _refine_profile_from_faces(
+                width_mm=width_mm,
+                height_mm=height_mm,
+                classification=classification,
+            )
+            if refined_profile is not None:
+                width_mm, height_mm = refined_profile
+                profile = detect_profile_from_dimensions(length_mm, width_mm, height_mm)
+                profile_hint = profile.profile_type
+                warnings.append(
+                    "Сечение трубы уточнено по поперечным граням; "
+                    "общий bbox не использован как профиль."
+                )
         diagnostic_edge_length_mm = classification.diagnostic_edge_length_mm
         ignored_longitudinal_edge_count = classification.ignored_longitudinal_edge_count
         ignored_profile_edge_count = classification.ignored_profile_edge_count
@@ -412,6 +426,58 @@ def _is_surface_only_iges_import(
     if file_format.upper() != "IGES":
         return False
     return any("поверхности без B-Rep" in warning for warning in import_warnings)
+
+
+def _refine_profile_from_faces(
+    *,
+    width_mm: float,
+    height_mm: float,
+    classification: object,
+) -> tuple[float, float] | None:
+    current_width = max(float(width_mm), float(height_mm))
+    known_side = min(float(width_mm), float(height_mm))
+    if known_side <= 0.0 or current_width <= known_side * 2.5:
+        return None
+
+    candidate_side = _profile_side_candidate_from_faces(
+        getattr(classification, "face_records", ()),
+        known_side=known_side,
+    )
+    if candidate_side <= 0.0:
+        return None
+
+    if abs(candidate_side - known_side) <= known_side * 0.15:
+        candidate_side = known_side
+    refined = sorted((known_side, candidate_side), reverse=True)
+    if refined[0] >= current_width * 0.75:
+        return None
+    return refined[0], refined[1]
+
+
+def _profile_side_candidate_from_faces(
+    face_records: object,
+    *,
+    known_side: float,
+) -> float:
+    candidates: list[float] = []
+    for face in face_records:
+        bounds = getattr(face, "bounds", None)
+        if bounds is None:
+            continue
+        sizes = sorted((size for size in bounds.sizes if size > 0.001))
+        if len(sizes) < 3:
+            continue
+        small, middle, large = sizes
+        if small > max(known_side * 0.15, 8.0):
+            continue
+        if not (known_side * 0.70 <= middle <= known_side * 1.30):
+            continue
+        if large < known_side * 0.70:
+            continue
+        candidates.append(large)
+    if not candidates:
+        return 0.0
+    return min(candidates, key=lambda value: abs(value - known_side))
 
 
 def _should_use_step_round_text_analysis(

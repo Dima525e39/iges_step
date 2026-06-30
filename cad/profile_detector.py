@@ -36,5 +36,5 @@ def detect_profile_from_dimensions(
     if slender_ratio < 2.0:
         return ProfileEstimate("Объемная деталь", width_mm, height_mm, "низкая")
     if cross_ratio <= 0.05:
-        return ProfileEstimate("Круглая/квадратная труба", width_mm, height_mm, "средняя")
+        return ProfileEstimate("Квадратная профильная труба", width_mm, height_mm, "средняя")
     return ProfileEstimate("Прямоугольная профильная труба", width_mm, height_mm, "средняя")

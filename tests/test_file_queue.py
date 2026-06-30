@@ -479,6 +479,55 @@ class GeometryAnalyzerTests(unittest.TestCase):
             any("Листовой анализ пропущен" in warning for warning in result.warnings)
         )
 
+    def test_profile_size_uses_cross_face_when_bbox_contains_diagonal_length(self) -> None:
+        import cad.analyzer as analyzer_module
+
+        original_classify = analyzer_module.classify_cut_edges
+
+        def fake_classification(*args, **kwargs):
+            return EdgeClassificationResult(
+                cut_edges=(),
+                all_edge_count=0,
+                outer_face_count=2,
+                face_records=(
+                    FaceRecord(
+                        object(),
+                        Bounds(-1707.5, -50.0, -181.1, -1600.4, 50.0, -175.1),
+                        False,
+                    ),
+                    FaceRecord(
+                        object(),
+                        Bounds(-1704.7, 50.0, -1389.0, -1091.1, 50.0, -168.2),
+                        True,
+                    ),
+                ),
+            )
+
+        analyzer_module.classify_cut_edges = fake_classification
+        try:
+            result = analyze_shape(
+                object(),
+                summary=ShapeSummary(
+                    diagonal_mm=1377.4,
+                    size_x_mm=618.247665,
+                    size_y_mm=100.0,
+                    size_z_mm=1220.880616,
+                    face_count=296,
+                    edge_count=3789,
+                ),
+                file_format="IGES",
+                import_warnings=(IgesEntitySummary(entity_count=1, entity_counts={144: 1}).warning(),),
+            )
+        finally:
+            analyzer_module.classify_cut_edges = original_classify
+
+        self.assertEqual(result.width_mm, 100.0)
+        self.assertEqual(result.height_mm, 100.0)
+        self.assertEqual(result.profile_hint, "Квадратная профильная труба")
+        self.assertTrue(
+            any("Сечение трубы уточнено" in warning for warning in result.warnings)
+        )
+
     def test_outer_longitudinal_face_uses_orientation_not_length_fraction(self) -> None:
         # Envelope of a 25x25 tube, 1000 mm long along Z.
         gb = Bounds(0.0, 0.0, 0.0, 25.0, 25.0, 1000.0)
@@ -1073,6 +1122,43 @@ class GeometryAnalyzerTests(unittest.TestCase):
             sum(edge.length_mm for edge in analysis_with_outer_flag.cut_edges),
             8197.137420,
         )
+
+    def test_square_profile_tube_does_not_use_round_bspline_bbox_fallback(self) -> None:
+        faces = (
+            FaceRecord(object(), Bounds(-255.0, 1206.0, -440.0, -255.0, 1254.0, -60.0), True),
+            FaceRecord(object(), Bounds(-309.0, 1200.0, -440.0, -261.0, 1200.0, -60.0), True),
+            FaceRecord(object(), Bounds(-315.0, 1206.0, -440.0, -315.0, 1254.0, -60.0), True),
+            FaceRecord(object(), Bounds(-309.0, 1260.0, -440.0, -261.0, 1260.0, -60.0), True),
+            FaceRecord(object(), Bounds(-315.0, 1200.0, -440.0, -309.0, 1206.0, -60.0), True),
+            FaceRecord(object(), Bounds(-261.0, 1200.0, -440.0, -255.0, 1206.0, -60.0), True),
+            FaceRecord(object(), Bounds(-315.0, 1254.0, -440.0, -309.0, 1260.0, -60.0), True),
+            FaceRecord(object(), Bounds(-261.0, 1254.0, -440.0, -255.0, 1260.0, -60.0), True),
+            FaceRecord(object(), Bounds(-258.0, 1206.0, -440.0, -258.0, 1254.0, -60.0), False),
+            FaceRecord(object(), Bounds(-309.0, 1203.0, -440.0, -261.0, 1203.0, -60.0), False),
+        )
+        end_edge = EdgeRecord(
+            object(),
+            670.248,
+            bounds=Bounds(-315.0, 1200.0, -440.0, -255.0, 1260.0, -440.0),
+        )
+        feature_edge = EdgeRecord(
+            object(),
+            15.708,
+            bounds=Bounds(-315.0, 1227.5, -427.5, -315.0, 1232.5, -422.5),
+        )
+
+        analysis = _analyze_round_tube_bspline_bbox_fallback(
+            faces,
+            (end_edge, feature_edge),
+            axis="Z",
+            length_mm=380.0,
+            global_bounds=Bounds(-315.0, 1200.0, -440.0, -255.0, 1260.0, -60.0),
+            has_outer_faces=True,
+            tolerance=0.01,
+        )
+
+        self.assertEqual(analysis.cut_edges, ())
+        self.assertEqual(analysis.pierce_count, 0)
 
     def test_round_split_surface_tube_uses_half_cylinder_bbox(self) -> None:
         faces = (
