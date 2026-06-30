@@ -57,6 +57,8 @@ from core.file_job import (
     parse_quantity_from_filename,
 )
 from core.file_queue import FileQueue
+from core import dev_reloader
+from core.dev_reloader import reload_calculation_core
 from core.specification_importer import (
     SpecificationItem,
     load_quantity_specification,
@@ -222,6 +224,31 @@ class FileQueueTests(unittest.TestCase):
         item = quantity_for_file("Корпус бок Д2.IGS", items)
         self.assertIsNotNone(item)
         self.assertEqual(item.quantity, 2)
+
+    def test_dev_reloader_adds_source_root_and_skips_missing_modules(self) -> None:
+        from tempfile import TemporaryDirectory
+
+        original_modules = dev_reloader.CALCULATION_MODULES
+        try:
+            with TemporaryDirectory() as temp_dir:
+                root = Path(temp_dir)
+                (root / "cad").mkdir()
+                (root / "cad" / "__init__.py").write_text("", encoding="utf-8")
+                (root / "cad" / "profile_detector.py").write_text(
+                    "VALUE = 42\n",
+                    encoding="utf-8",
+                )
+                dev_reloader.CALCULATION_MODULES = (
+                    "cad.profile_detector",
+                    "cad.missing_debug_module",
+                )
+
+                result = reload_calculation_core(root)
+
+            self.assertEqual(result.modules, ("cad.profile_detector",))
+            self.assertEqual(result.skipped, ("cad.missing_debug_module",))
+        finally:
+            dev_reloader.CALCULATION_MODULES = original_modules
 
 
 class CadImporterTests(unittest.TestCase):

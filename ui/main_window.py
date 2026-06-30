@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
 from app_info import APP_NAME, APP_VERSION, build_label
 from cad.analyzer import GeometryAnalysisResult, analyze_shape
 from cad.shape_summary import ShapeSummary
+from core.dev_reloader import reload_calculation_core
 from core.file_job import (
     PLACEHOLDER,
     FileJob,
@@ -529,6 +530,72 @@ class MainWindow(QMainWindow):
         self.shape_analyses.clear()
         self._refresh_jobs()
         self.statusBar().showMessage(f"Проект открыт: {Path(source_path).name}", 5000)
+
+    def _reload_calculation_core(self) -> None:
+        source_root = QFileDialog.getExistingDirectory(
+            self,
+            "DEV: выбрать папку исходников",
+            str(Path.cwd()),
+        )
+        if not source_root:
+            return
+        try:
+            result = reload_calculation_core(source_root)
+            self._rebind_reloaded_calculation_modules()
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "DEV: перезагрузка ядра",
+                f"Не удалось перезагрузить расчетное ядро:\n{exc}",
+            )
+            return
+
+        self.shape_analyses.clear()
+        self._shown_3d_path = None
+        self._shown_2d_path = None
+        for job in self.queue.jobs():
+            if job.status == STATUS_IMPORTED:
+                job.status = STATUS_PENDING
+                job.warnings.append(
+                    "Расчетное ядро перезагружено; обработайте файл повторно для пересчета."
+                )
+        self._refresh_jobs()
+
+        skipped = f"\nПропущено: {len(result.skipped)}" if result.skipped else ""
+        QMessageBox.information(
+            self,
+            "DEV: перезагрузка ядра",
+            f"Папка: {result.source_root}\n"
+            f"Перезагружено модулей: {len(result.modules)}"
+            f"{skipped}\n\n"
+            "Для применения новой логики обработайте нужные файлы повторно.",
+        )
+        self.statusBar().showMessage(
+            f"Расчетное ядро перезагружено: {len(result.modules)} модулей",
+            7000,
+        )
+
+    def _rebind_reloaded_calculation_modules(self) -> None:
+        import cad.analyzer as analyzer_module
+        import cad.edge_classifier as edge_classifier_module
+        import cad.pierce_counter as pierce_counter_module
+        import ui.geometry_debug_dialog as debug_dialog_module
+        import ui.import_worker as import_worker_module
+
+        globals()["analyze_shape"] = analyzer_module.analyze_shape
+        import_worker_module.analyze_shape = analyzer_module.analyze_shape
+        debug_dialog_module.analyze_shape = analyzer_module.analyze_shape
+        debug_dialog_module.classify_cut_edges = edge_classifier_module.classify_cut_edges
+        debug_dialog_module.count_edge_components = pierce_counter_module.count_edge_components
+        if self.geometry_debug_dialog is not None:
+            job = self._current_job()
+            path = job.normalized_path if job is not None else ""
+            self.geometry_debug_dialog.set_context(
+                job=job,
+                shape=self.imported_shapes.get(path),
+                summary=self.shape_summaries.get(path),
+                analysis=None,
+            )
 
     def _import_quantity_specification(self) -> None:
         if len(self.queue) == 0:

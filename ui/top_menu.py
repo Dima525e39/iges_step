@@ -16,6 +16,8 @@ def install_top_menu(window: QMainWindow) -> None:
     _add_action(file_menu, "Сохранить проект", window._save_project)
     _add_action(file_menu, "Открыть проект", window._open_project)
     file_menu.addSeparator()
+    _add_action(file_menu, "DEV: перезагрузить расчетное ядро", window._reload_calculation_core)
+    file_menu.addSeparator()
     _add_action(file_menu, "Очистить список", window._clear_jobs)
     _add_action(file_menu, "Выход", window.close)
 
