@@ -25,6 +25,7 @@ CALCULATION_MODULES = (
     "pricing.material_cost",
     "purchase.tube_grouping",
     "purchase.tube_purchase_calculator",
+    "ui.import_worker",
 )
 
 
@@ -71,7 +72,7 @@ def _prepend_sys_path(root: Path) -> None:
 
 
 def _prepend_package_paths(root: Path) -> None:
-    for package_name in ("cad", "core", "pricing", "purchase"):
+    for package_name in ("cad", "core", "pricing", "purchase", "ui"):
         package_dir = root / package_name
         if not package_dir.is_dir():
             continue

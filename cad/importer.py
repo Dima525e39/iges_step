@@ -16,6 +16,7 @@ from cad.supported_formats import is_supported_cad_file
 # gap that is still treated as a coincident edge.
 IGES_SEW_TOLERANCE_MM = 0.01
 IGES_SOLID_SEW_TOLERANCES_MM = (0.01, 0.05, 0.1)
+IGES_SURFACE_ONLY_SOLID_HEAL_ENTITY_LIMIT = 3000
 IGES_BREP_ENTITY_TYPES = frozenset({186, 502, 504, 508, 510, 514})
 IGES_SURFACE_ENTITY_TYPES = frozenset(
     {
@@ -71,6 +72,13 @@ class IgesEntitySummary:
     def is_surface_only_model(self) -> bool:
         return self.has_surfaces and not self.has_brep_topology
 
+    @property
+    def should_skip_solid_healing(self) -> bool:
+        return (
+            self.is_surface_only_model
+            and self.entity_count > IGES_SURFACE_ONLY_SOLID_HEAL_ENTITY_LIMIT
+        )
+
     def warning(self) -> str:
         return (
             "IGES содержит поверхности без B-Rep solid/shell; "
@@ -78,11 +86,32 @@ class IgesEntitySummary:
             "при неудаче используется анализ поверхностей."
         )
 
+    def warnings(self, *, force_solid_healing: bool = False) -> tuple[str, ...]:
+        if not self.is_surface_only_model:
+            return ()
+        if force_solid_healing:
+            return (
+                "IGES содержит поверхности без B-Rep solid/shell; "
+                "включен точный режим с попыткой собрать solid.",
+            )
+        if self.should_skip_solid_healing:
+            return (
+                "IGES содержит поверхности без B-Rep solid/shell; "
+                "для тяжелого файла используется быстрое сшивание поверхностей "
+                "без многократной сборки solid.",
+            )
+        return (self.warning(),)
+
 
 class CadImporter:
     """Imports STEP/STP/IGES/IGS files through pythonocc-core."""
 
-    def import_file(self, path: str | Path) -> CadImportResult:
+    def import_file(
+        self,
+        path: str | Path,
+        *,
+        force_iges_solid_healing: bool = False,
+    ) -> CadImportResult:
         file_path = Path(path)
         if not file_path.exists():
             raise CadImportError(f"Файл не найден: {file_path}")
@@ -94,7 +123,11 @@ class CadImporter:
 
         try:
             with self._path_for_opencascade(file_path) as read_path:
-                shape = self._read_shape(read_path, iges_summary=iges_summary)
+                shape = self._read_shape(
+                    read_path,
+                    iges_summary=iges_summary,
+                    force_iges_solid_healing=force_iges_solid_healing,
+                )
         except ImportError as exc:
             raise CadImportError(
                 "pythonocc-core недоступен в этом запуске. "
@@ -111,8 +144,8 @@ class CadImporter:
             shape=shape,
             file_format=file_format,
             warnings=(
-                (iges_summary.warning(),)
-                if iges_summary is not None and iges_summary.is_surface_only_model
+                iges_summary.warnings(force_solid_healing=force_iges_solid_healing)
+                if iges_summary is not None
                 else ()
             ),
         )
@@ -126,12 +159,22 @@ class CadImporter:
             return "IGES"
         return "UNKNOWN"
 
-    def _read_shape(self, path: Path, *, iges_summary: IgesEntitySummary | None = None):
+    def _read_shape(
+        self,
+        path: Path,
+        *,
+        iges_summary: IgesEntitySummary | None = None,
+        force_iges_solid_healing: bool = False,
+    ):
         file_format = self.detect_format(path)
         if file_format == "STEP":
             return self._read_step(path)
         if file_format == "IGES":
-            return self._read_iges(path, iges_summary=iges_summary)
+            return self._read_iges(
+                path,
+                iges_summary=iges_summary,
+                force_solid_healing=force_iges_solid_healing,
+            )
         raise CadImportError(f"Формат файла не поддерживается: {path.suffix}")
 
     @staticmethod
@@ -163,7 +206,12 @@ class CadImporter:
         return reader.OneShape()
 
     @staticmethod
-    def _read_iges(path: Path, *, iges_summary: IgesEntitySummary | None = None):
+    def _read_iges(
+        path: Path,
+        *,
+        iges_summary: IgesEntitySummary | None = None,
+        force_solid_healing: bool = False,
+    ):
         last_error: CadImportError | None = None
         candidates = [path]
         temp_dir_context = None
@@ -183,6 +231,11 @@ class CadImporter:
                     continue
                 if not _shape_is_null(shape):
                     if iges_summary is not None and iges_summary.is_surface_only_model:
+                        if (
+                            iges_summary.should_skip_solid_healing
+                            and not force_solid_healing
+                        ):
+                            return _sew_iges_shape(shape)
                         return _heal_surface_only_iges_shape(shape)
                     return _sew_iges_shape(shape)
                 last_error = CadImportError("OpenCascade вернул пустую IGES-модель.")

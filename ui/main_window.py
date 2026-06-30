@@ -278,8 +278,11 @@ class MainWindow(QMainWindow):
         self.manual_thickness_input.setSuffix(" мм")
         self.manual_thickness_input.setEnabled(False)
         self.debug_edges_checkbox = QCheckBox("debug_edges.csv")
+        self.rebuild_iges_solid_button = QPushButton("Точный IGES: собрать solid")
+        self.rebuild_iges_solid_button.setEnabled(False)
         geometry_layout.addRow(self.manual_thickness_checkbox, self.manual_thickness_input)
         geometry_layout.addRow(self.debug_edges_checkbox)
+        geometry_layout.addRow(self.rebuild_iges_solid_button)
         layout.addWidget(geometry_group)
 
         pricing_group = QGroupBox("Стоимость")
@@ -392,6 +395,7 @@ class MainWindow(QMainWindow):
         self.compact_list.currentRowChanged.connect(self._sync_from_compact_selection)
         self.tabs.currentChanged.connect(self._on_tab_changed)
         self.geometry_debug_button.clicked.connect(self._open_geometry_debugger)
+        self.rebuild_iges_solid_button.clicked.connect(self._rebuild_selected_iges_solid)
         self.manual_thickness_checkbox.toggled.connect(self.manual_thickness_input.setEnabled)
 
     def _choose_files(self) -> None:
@@ -471,6 +475,31 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Импорт", "Выберите файл в списке.")
             return
         self._start_import(selected_paths)
+
+    def _rebuild_selected_iges_solid(self) -> None:
+        job = self._current_job()
+        if job is None:
+            QMessageBox.information(self, "Точный IGES", "Выберите IGES-файл в списке.")
+            return
+        if job.path.suffix.casefold() not in {".iges", ".igs"}:
+            QMessageBox.information(
+                self,
+                "Точный IGES",
+                "Точный режим восстановления solid доступен только для IGES / IGS.",
+            )
+            return
+
+        answer = QMessageBox.question(
+            self,
+            "Точный IGES",
+            "Программа попробует сшить поверхности IGES и собрать твердое тело.\n"
+            "На тяжелых файлах это может занять заметное время.\n\n"
+            f"Запустить для файла {job.name}?",
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+
+        self._start_import([job.normalized_path], force_iges_solid_healing=True)
 
     def _process_all(self) -> None:
         if len(self.queue) == 0:
@@ -664,7 +693,12 @@ class MainWindow(QMainWindow):
             6000,
         )
 
-    def _start_import(self, paths: list[str]) -> None:
+    def _start_import(
+        self,
+        paths: list[str],
+        *,
+        force_iges_solid_healing: bool = False,
+    ) -> None:
         if self.import_thread is not None:
             QMessageBox.information(self, "Импорт", "Импорт уже выполняется.")
             return
@@ -714,6 +748,7 @@ class MainWindow(QMainWindow):
             [Path(job.normalized_path) for job in import_jobs],
             manual_wall_thickness_mm=manual_thickness,
             debug_edges_enabled=self.debug_edges_checkbox.isChecked(),
+            force_iges_solid_healing=force_iges_solid_healing,
         )
         self.import_worker.moveToThread(self.import_thread)
         self.import_thread.started.connect(self.import_worker.run)
@@ -789,6 +824,7 @@ class MainWindow(QMainWindow):
         self.export_dxf_button.setEnabled(enabled)
         self.export_svg_button.setEnabled(enabled)
         self.nesting_button.setEnabled(enabled)
+        self.rebuild_iges_solid_button.setEnabled(enabled and self._current_job_is_iges())
 
     def _apply_analysis_to_job(
         self,
@@ -1289,6 +1325,9 @@ class MainWindow(QMainWindow):
         analysis = self.shape_analyses.get(job.normalized_path) if job is not None else None
         self._show_selected_preview(job, force=False)
         self.geometry_debug_button.setEnabled(shape is not None)
+        self.rebuild_iges_solid_button.setEnabled(
+            self.import_thread is None and self._job_is_iges(job)
+        )
         if self.geometry_debug_dialog is not None:
             self.geometry_debug_dialog.set_context(
                 job=job,
@@ -1389,6 +1428,13 @@ class MainWindow(QMainWindow):
                     analysis=analysis,
                 )
             self._shown_2d_path = path
+
+    def _current_job_is_iges(self) -> bool:
+        return self._job_is_iges(self._current_job())
+
+    @staticmethod
+    def _job_is_iges(job: FileJob | None) -> bool:
+        return job is not None and job.path.suffix.casefold() in {".iges", ".igs"}
 
     def _open_geometry_debugger(self) -> None:
         job = self._current_job()

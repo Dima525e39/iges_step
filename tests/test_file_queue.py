@@ -40,6 +40,7 @@ from cad.debug_edges import write_debug_edges_csv
 from cad.importer import (
     CadImportError,
     CadImporter,
+    IGES_SURFACE_ONLY_SOLID_HEAL_ENTITY_LIMIT,
     IgesEntitySummary,
     _heal_surface_only_iges_shape,
     _sanitize_iges_ascii_bytes,
@@ -399,6 +400,101 @@ class CadImporterTests(unittest.TestCase):
 
         self.assertIs(result, solid)
         self.assertEqual(heal_calls, [shape])
+
+    def test_heavy_surface_only_iges_skips_solid_healing(self) -> None:
+        import cad.importer as importer_module
+        from tempfile import TemporaryDirectory
+
+        class FakeShape:
+            def IsNull(self) -> bool:
+                return False
+
+        class FakeSewedShape:
+            def IsNull(self) -> bool:
+                return False
+
+        original_read_once = CadImporter._read_iges_once
+        original_heal = importer_module._heal_surface_only_iges_shape
+        original_sew = importer_module._sew_iges_shape
+        heal_calls: list[object] = []
+        sew_calls: list[object] = []
+        shape = FakeShape()
+        sewed_shape = FakeSewedShape()
+
+        try:
+            CadImporter._read_iges_once = staticmethod(lambda path: shape)
+            importer_module._heal_surface_only_iges_shape = (
+                lambda candidate: heal_calls.append(candidate) or candidate
+            )
+            importer_module._sew_iges_shape = (
+                lambda candidate: sew_calls.append(candidate) or sewed_shape
+            )
+            with TemporaryDirectory() as temp_dir:
+                path = Path(temp_dir) / "heavy_surface.igs"
+                path.write_text("", encoding="ascii")
+                result = CadImporter._read_iges(
+                    path,
+                    iges_summary=IgesEntitySummary(
+                        entity_count=IGES_SURFACE_ONLY_SOLID_HEAL_ENTITY_LIMIT + 1,
+                        entity_counts={144: IGES_SURFACE_ONLY_SOLID_HEAL_ENTITY_LIMIT + 1},
+                    ),
+                )
+        finally:
+            CadImporter._read_iges_once = original_read_once
+            importer_module._heal_surface_only_iges_shape = original_heal
+            importer_module._sew_iges_shape = original_sew
+
+        self.assertIs(result, sewed_shape)
+        self.assertEqual(heal_calls, [])
+        self.assertEqual(sew_calls, [shape])
+
+    def test_forced_heavy_surface_only_iges_attempts_solid_healing(self) -> None:
+        import cad.importer as importer_module
+        from tempfile import TemporaryDirectory
+
+        class FakeShape:
+            def IsNull(self) -> bool:
+                return False
+
+        class FakeSolid:
+            def IsNull(self) -> bool:
+                return False
+
+        original_read_once = CadImporter._read_iges_once
+        original_heal = importer_module._heal_surface_only_iges_shape
+        original_sew = importer_module._sew_iges_shape
+        heal_calls: list[object] = []
+        sew_calls: list[object] = []
+        shape = FakeShape()
+        solid = FakeSolid()
+
+        try:
+            CadImporter._read_iges_once = staticmethod(lambda path: shape)
+            importer_module._heal_surface_only_iges_shape = (
+                lambda candidate: heal_calls.append(candidate) or solid
+            )
+            importer_module._sew_iges_shape = (
+                lambda candidate: sew_calls.append(candidate) or candidate
+            )
+            with TemporaryDirectory() as temp_dir:
+                path = Path(temp_dir) / "heavy_surface.igs"
+                path.write_text("", encoding="ascii")
+                result = CadImporter._read_iges(
+                    path,
+                    iges_summary=IgesEntitySummary(
+                        entity_count=IGES_SURFACE_ONLY_SOLID_HEAL_ENTITY_LIMIT + 1,
+                        entity_counts={144: IGES_SURFACE_ONLY_SOLID_HEAL_ENTITY_LIMIT + 1},
+                    ),
+                    force_solid_healing=True,
+                )
+        finally:
+            CadImporter._read_iges_once = original_read_once
+            importer_module._heal_surface_only_iges_shape = original_heal
+            importer_module._sew_iges_shape = original_sew
+
+        self.assertIs(result, solid)
+        self.assertEqual(heal_calls, [shape])
+        self.assertEqual(sew_calls, [])
 
     def test_surface_only_iges_healing_falls_back_to_original_shape(self) -> None:
         sentinel = object()

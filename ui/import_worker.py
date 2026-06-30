@@ -22,11 +22,13 @@ class CadImportWorker(QObject):
         *,
         manual_wall_thickness_mm: float | None = None,
         debug_edges_enabled: bool = False,
+        force_iges_solid_healing: bool = False,
     ) -> None:
         super().__init__()
         self.paths = [str(path) for path in paths]
         self.manual_wall_thickness_mm = manual_wall_thickness_mm
         self.debug_edges_enabled = debug_edges_enabled
+        self.force_iges_solid_healing = force_iges_solid_healing
 
     @Slot()
     def run(self) -> None:
@@ -53,7 +55,10 @@ class CadImportWorker(QObject):
                         sheet_analysis=sheet_analysis,
                     )
                 else:
-                    result = importer.import_file(path)
+                    result = importer.import_file(
+                        path,
+                        force_iges_solid_healing=self.force_iges_solid_healing,
+                    )
                     summary = summarize_shape(result.shape)
                     debug_edges_path = (
                         source_path.with_name("debug_edges.csv")
