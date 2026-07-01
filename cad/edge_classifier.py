@@ -2538,10 +2538,11 @@ def _prefer_cut_edge_components_for_cut_faces(
     cut_face_pierce_count: int,
     outer_face_count: int,
 ) -> bool:
-    return (
-        outer_face_count >= 8
-        and cut_face_edge_component_count >= max(4, cut_face_pierce_count + 3)
-    )
+    if outer_face_count < 8 or cut_face_edge_component_count < 4:
+        return False
+    if cut_face_pierce_count <= 1:
+        return True
+    return cut_face_edge_component_count >= cut_face_pierce_count
 
 
 def _shell_open_boundary_components(

@@ -2490,6 +2490,13 @@ END-ISO-10303-21;
                 outer_face_count=20,
             )
         )
+        self.assertTrue(
+            _prefer_cut_edge_components_for_cut_faces(
+                cut_face_edge_component_count=7,
+                cut_face_pierce_count=7,
+                outer_face_count=8,
+            )
+        )
         self.assertFalse(
             _prefer_cut_edge_components_for_cut_faces(
                 cut_face_edge_component_count=27,
