@@ -398,6 +398,12 @@ def classify_cut_edges(
             global_bounds=global_bounds,
             tolerance=tolerance,
         )
+        cut_face_edge_component_count = _count_cut_edge_components(
+            cut_face_analysis.cut_edges,
+            axis=axis,
+            global_bounds=global_bounds,
+            tolerance=tolerance,
+        )
         shell_open_boundary_analysis = _analyze_shell_open_boundary_fallback(
             edge_records,
             base_cut_edges=cut_face_analysis.cut_edges,
@@ -406,7 +412,14 @@ def classify_cut_edges(
             length_mm=length_mm,
             tolerance=tolerance,
         )
+        prefer_cut_edge_components = _prefer_cut_edge_components_for_cut_faces(
+            cut_face_edge_component_count=cut_face_edge_component_count,
+            cut_face_pierce_count=cut_face_analysis.pierce_count,
+            outer_face_count=outer_face_count,
+        )
         use_shell_open_boundary_fallback = (
+            not prefer_cut_edge_components
+            and
             bool(shell_open_boundary_analysis.cut_edges)
             and shell_open_boundary_analysis.pierce_count
             >= max(cut_face_analysis.pierce_count + 3, 4)
@@ -478,7 +491,11 @@ def classify_cut_edges(
                 "по открытым наружным границам оболочки, длина будет уточнена по площади граней реза."
             )
         else:
-            pierce_count_override = cut_face_analysis.pierce_count
+            pierce_count_override = (
+                cut_face_edge_component_count
+                if prefer_cut_edge_components
+                else cut_face_analysis.pierce_count
+            )
             warnings.append(
                 "Длина реза рассчитана по наружным границам граней стенки реза; "
                 "внутренние кромки толщины и разбиение CAD-граней не суммируются."
@@ -2512,6 +2529,18 @@ def _analyze_shell_open_boundary_fallback(
     return ShellOpenBoundaryAnalysis(
         cut_edges=tuple(selected),
         pierce_count=max(base_pierce_count, 0) + len(merged_components),
+    )
+
+
+def _prefer_cut_edge_components_for_cut_faces(
+    *,
+    cut_face_edge_component_count: int,
+    cut_face_pierce_count: int,
+    outer_face_count: int,
+) -> bool:
+    return (
+        outer_face_count >= 8
+        and cut_face_edge_component_count >= max(4, cut_face_pierce_count + 3)
     )
 
 

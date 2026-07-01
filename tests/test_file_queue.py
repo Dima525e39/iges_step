@@ -33,6 +33,7 @@ from cad.edge_classifier import (
     _is_cut_edge_candidate,
     _is_outer_longitudinal_face,
     _is_thickness_face_candidate,
+    _prefer_cut_edge_components_for_cut_faces,
     _tolerance_from_summary,
     WireRecord,
     estimate_wall_thickness,
@@ -2480,6 +2481,22 @@ END-ISO-10303-21;
         self.assertEqual(analysis.cut_edges, (stitched_edge,))
         self.assertEqual(analysis.pierce_count, 1)
         self.assertEqual(stitched_edge.edge_type, CUT_FEATURE)
+
+    def test_profile_tube_prefers_cut_edge_components_when_outer_skin_is_clear(self) -> None:
+        self.assertTrue(
+            _prefer_cut_edge_components_for_cut_faces(
+                cut_face_edge_component_count=12,
+                cut_face_pierce_count=1,
+                outer_face_count=20,
+            )
+        )
+        self.assertFalse(
+            _prefer_cut_edge_components_for_cut_faces(
+                cut_face_edge_component_count=27,
+                cut_face_pierce_count=27,
+                outer_face_count=5,
+            )
+        )
 
     def test_three_plane_cut_with_internal_middle_face_is_one_pierce(self) -> None:
         # A 3-plane notch where the middle (bottom) plane never reaches the
