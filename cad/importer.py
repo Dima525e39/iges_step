@@ -330,7 +330,10 @@ def _solid_from_shape(shape: object) -> object | None:
     except Exception:
         return None
 
-    explorer = TopExp_Explorer(shape, TopAbs_SHELL)
+    try:
+        explorer = TopExp_Explorer(shape, TopAbs_SHELL)
+    except Exception:
+        return None
     while explorer.More():
         shell = explorer.Current()
         try:

@@ -656,6 +656,7 @@ def _collect_edge_records(
     from OCC.Core.TopAbs import TopAbs_EDGE
 
     records: list[EdgeRecord] = []
+    edge_index: dict[int, list[EdgeRecord]] = {}
     for face_record in face_records:
         wire_records = _collect_wire_records(face_record, warnings=warnings)
         if wire_records:
@@ -663,7 +664,12 @@ def _collect_edge_records(
             for wire_record in wire_records:
                 wire_record.is_outer_wire = wire_record is outer_wire
                 for edge in wire_record.edges:
-                    record = _get_or_create_edge_record(records, edge, warnings)
+                    record = _get_or_create_edge_record(
+                        records,
+                        edge,
+                        warnings,
+                        edge_index=edge_index,
+                    )
                     _append_unique_face(record, face_record)
                     if not wire_record.is_outer_wire:
                         record.wire_roles.add("inner_wire")
@@ -678,7 +684,12 @@ def _collect_edge_records(
             continue
 
         for edge in _iter_shapes(face_record.face, TopAbs_EDGE):
-            record = _get_or_create_edge_record(records, edge, warnings)
+            record = _get_or_create_edge_record(
+                records,
+                edge,
+                warnings,
+                edge_index=edge_index,
+            )
             _append_unique_face(record, face_record)
     return records
 
@@ -2639,8 +2650,20 @@ def _edge_components_by_touch(
     if not edges:
         return ()
     parent = list(range(len(edges)))
-    for first_index, first in enumerate(edges):
-        for second_index in range(first_index + 1, len(edges)):
+    _union_edges_by_endpoint_keys(
+        edges,
+        union=lambda first, second: _union_component(parent, first, second),
+        tolerance=tolerance,
+    )
+
+    slow_indexes = tuple(
+        index
+        for index, edge in enumerate(edges)
+        if edge.start_point is None or edge.end_point is None
+    )
+    for offset, first_index in enumerate(slow_indexes):
+        first = edges[first_index]
+        for second_index in slow_indexes[offset + 1 :]:
             if _edge_endpoints_touch(first, edges[second_index], tolerance=tolerance):
                 _union_component(parent, first_index, second_index)
 
@@ -3061,24 +3084,36 @@ def _cut_edge_component_ids(
         if first_root != second_root:
             parent[second_root] = first_root
 
-    for left_index, left in enumerate(edges):
-        for right_index in range(left_index + 1, len(edges)):
-            right = edges[right_index]
-            if (
-                axis is not None
-                and global_bounds is not None
-                and _same_tube_end_side(
-                    left,
-                    right,
-                    axis=axis,
-                    global_bounds=global_bounds,
-                    tolerance=tolerance,
-                )
-            ):
+    _union_edges_by_endpoint_keys(edges, union=union, tolerance=tolerance)
+
+    slow_indexes = tuple(
+        index
+        for index, edge in enumerate(edges)
+        if edge.start_point is None or edge.end_point is None
+    )
+    for offset, left_index in enumerate(slow_indexes):
+        left = edges[left_index]
+        for right_index in slow_indexes[offset + 1 :]:
+            if _edge_endpoints_touch(left, edges[right_index], tolerance=tolerance):
                 union(left_index, right_index)
+
+    if axis is not None and global_bounds is not None:
+        end_groups: dict[str, list[int]] = {}
+        for index, edge in enumerate(edges):
+            side = _edge_end_side(
+                edge,
+                axis=axis,
+                global_bounds=global_bounds,
+                tolerance=tolerance,
+            )
+            if side is not None:
+                end_groups.setdefault(side, []).append(index)
+        for indexes in end_groups.values():
+            if len(indexes) < 2:
                 continue
-            if _edge_endpoints_touch(left, right, tolerance=tolerance):
-                union(left_index, right_index)
+            first_index = indexes[0]
+            for index in indexes[1:]:
+                union(first_index, index)
 
     if global_bounds is not None:
         _merge_coplanar_fragment_components(
@@ -3097,6 +3132,39 @@ def _cut_edge_component_ids(
             root_to_component[root] = len(root_to_component) + 1
         component_ids[index] = root_to_component[root]
     return component_ids
+
+
+def _union_edges_by_endpoint_keys(
+    edges: tuple[EdgeRecord, ...],
+    *,
+    union,
+    tolerance: float,
+) -> None:
+    point_to_indexes: dict[tuple[int, int, int], list[int]] = {}
+    for index, edge in enumerate(edges):
+        for point in (edge.start_point, edge.end_point):
+            key = _point_bucket_key(point, tolerance=tolerance)
+            if key is None:
+                continue
+            point_to_indexes.setdefault(key, []).append(index)
+
+    for indexes in point_to_indexes.values():
+        if len(indexes) < 2:
+            continue
+        first_index = indexes[0]
+        for index in indexes[1:]:
+            union(first_index, index)
+
+
+def _point_bucket_key(
+    point: tuple[float, float, float] | None,
+    *,
+    tolerance: float,
+) -> tuple[int, int, int] | None:
+    if point is None:
+        return None
+    bucket = max(tolerance, 0.001)
+    return tuple(int(round(coordinate / bucket)) for coordinate in point)
 
 
 def _merge_coplanar_fragment_components(
@@ -3262,17 +3330,22 @@ def _thickness_faces_touch(
 
 
 def _shared_thickness_edges(records: tuple[ThicknessFaceRecord, ...]) -> tuple[object, ...]:
-    shared_edges: list[object] = []
-    for first_index, first in enumerate(records):
-        for second in records[first_index + 1 :]:
-            for first_edge in first.edges:
-                for second_edge in second.edges:
-                    if not _is_same_shape(first_edge.edge, second_edge.edge):
-                        continue
-                    if _contains_same_shape(shared_edges, first_edge.edge):
-                        continue
-                    shared_edges.append(first_edge.edge)
-    return tuple(shared_edges)
+    edge_counts: dict[int, int] = {}
+    edge_shapes: dict[int, object] = {}
+    for record in records:
+        seen_record_edges: set[int] = set()
+        for edge in record.edges:
+            edge_id = id(edge)
+            if edge_id in seen_record_edges:
+                continue
+            edge_counts[edge_id] = edge_counts.get(edge_id, 0) + 1
+            edge_shapes[edge_id] = edge.edge
+            seen_record_edges.add(edge_id)
+    return tuple(
+        edge_shapes[edge_id]
+        for edge_id, count in edge_counts.items()
+        if count > 1
+    )
 
 
 def _contains_same_shape(shapes: Iterable[object], shape: object) -> bool:
@@ -3348,8 +3421,12 @@ def _get_or_create_edge_record(
     records: list[EdgeRecord],
     edge: object,
     warnings: list[str],
+    *,
+    edge_index: dict[int, list[EdgeRecord]] | None = None,
 ) -> EdgeRecord:
-    record = _find_same_edge(records, edge)
+    edge_key = hash(edge)
+    candidates = edge_index.get(edge_key, []) if edge_index is not None else records
+    record = _find_same_edge(candidates, edge)
     if record is not None:
         return record
 
@@ -3362,6 +3439,8 @@ def _get_or_create_edge_record(
     record.start_point = _vertex_point(record.start_vertex)
     record.end_point = _vertex_point(record.end_vertex)
     records.append(record)
+    if edge_index is not None:
+        edge_index.setdefault(edge_key, []).append(record)
     return record
 
 
