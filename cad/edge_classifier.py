@@ -2442,7 +2442,7 @@ def _analyze_shell_open_boundary_fallback(
     tolerance: float,
 ) -> ShellOpenBoundaryAnalysis:
     edge_records = tuple(edge_records)
-    candidates = tuple(
+    open_candidates = tuple(
         edge
         for edge in edge_records
         if _is_shell_open_boundary_cut_candidate(
@@ -2453,10 +2453,11 @@ def _analyze_shell_open_boundary_fallback(
             include_stitched_edges=False,
         )
     )
-    merged_components = _shell_open_boundary_components(
-        candidates,
+    open_components = _shell_open_boundary_components(
+        open_candidates,
         tolerance=tolerance,
     )
+    merged_components = open_components
 
     stitched_candidates = tuple(
         edge
@@ -2470,7 +2471,11 @@ def _analyze_shell_open_boundary_fallback(
         )
         and edge.adjacent_face_count == 2
     )
-    if stitched_candidates and len(merged_components) < max(12, int(base_pierce_count * 0.75)):
+    use_stitched = stitched_candidates and len(open_components) < max(
+        12,
+        int(base_pierce_count * 0.75),
+    )
+    if use_stitched:
         min_stitched_length = _stitched_shell_min_cut_length(
             stitched_candidates,
             tolerance=tolerance,
@@ -2478,14 +2483,17 @@ def _analyze_shell_open_boundary_fallback(
         stitched_candidates = tuple(
             edge for edge in stitched_candidates if edge.length_mm > min_stitched_length
         )
-    if stitched_candidates and len(merged_components) < max(12, int(base_pierce_count * 0.75)):
-        candidates = candidates + stitched_candidates
-        merged_components = _shell_open_boundary_components(
-            candidates,
+        stitched_components = _shell_open_boundary_components(
+            stitched_candidates,
             tolerance=tolerance,
         )
+        stitched_components = _largest_shell_components(
+            stitched_components,
+            limit=max(8, base_pierce_count // 4),
+        )
+        merged_components = open_components + stitched_components
 
-    if not candidates or not merged_components:
+    if not merged_components:
         return ShellOpenBoundaryAnalysis()
 
     selected: list[EdgeRecord] = list(base_cut_edges)
@@ -2547,6 +2555,22 @@ def _stitched_shell_min_cut_length(
     if dominant_count < 8:
         return max(tolerance * 10.0, 0.5)
     return max(tolerance * 10.0, dominant_length * 1.10)
+
+
+def _largest_shell_components(
+    components: tuple[tuple[EdgeRecord, ...], ...],
+    *,
+    limit: int,
+) -> tuple[tuple[EdgeRecord, ...], ...]:
+    if limit <= 0:
+        return ()
+    return tuple(
+        sorted(
+            components,
+            key=lambda component: sum(edge.length_mm for edge in component),
+            reverse=True,
+        )[:limit]
+    )
 
 
 def _is_shell_open_boundary_cut_candidate(
