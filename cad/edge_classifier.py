@@ -398,12 +398,13 @@ def classify_cut_edges(
             global_bounds=global_bounds,
             tolerance=tolerance,
         )
-        cut_face_edge_component_count = _count_cut_edge_components(
+        cut_face_edge_component_ids = _cut_edge_component_ids(
             cut_face_analysis.cut_edges,
             axis=axis,
             global_bounds=global_bounds,
             tolerance=tolerance,
         )
+        cut_face_edge_component_count = len(set(cut_face_edge_component_ids.values()))
         shell_open_boundary_analysis = _analyze_shell_open_boundary_fallback(
             edge_records,
             base_cut_edges=cut_face_analysis.cut_edges,
@@ -436,6 +437,9 @@ def classify_cut_edges(
                 edge_records,
                 selected_cut_edges=cut_face_analysis.cut_edges,
             )
+            if prefer_cut_edge_components:
+                for index, edge in enumerate(cut_face_analysis.cut_edges):
+                    edge.cut_component_id = cut_face_edge_component_ids.get(index, 0)
             groups = _groups_from_edge_records(edge_records)
             cut_edges = cut_face_analysis.cut_edges
     elif use_shell_open_boundary_fallback:
@@ -2549,7 +2553,7 @@ def _prefer_cut_edge_components_for_cut_faces(
     cut_face_pierce_count: int,
     outer_face_count: int,
 ) -> bool:
-    if outer_face_count < 8 or cut_face_edge_component_count < 4:
+    if outer_face_count < 8 or cut_face_edge_component_count < 2:
         return False
     if cut_face_pierce_count <= 1:
         return True
