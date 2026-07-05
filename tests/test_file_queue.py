@@ -20,6 +20,7 @@ from cad.edge_classifier import (
     FaceRecord,
     ThicknessFaceRecord,
     _add_diagonal_profile_side_holes,
+    _analyze_complex_profile_contour_fallback,
     _analyze_cut_faces,
     _analyze_round_tube_bspline_bbox_fallback,
     _analyze_round_tube_edge_fallback,
@@ -2481,6 +2482,55 @@ END-ISO-10303-21;
         self.assertEqual(analysis.cut_edges, (stitched_edge,))
         self.assertEqual(analysis.pierce_count, 1)
         self.assertEqual(stitched_edge.edge_type, CUT_FEATURE)
+
+    def test_complex_profile_contour_fallback_uses_dominant_and_opposite_end(self) -> None:
+        dominant_a = EdgeRecord(
+            edge=object(),
+            length_mm=180.0,
+            bounds=Bounds(0.0, 0.0, -250.0, 0.0, 0.0, -100.0),
+            edge_type=UNCERTAIN,
+        )
+        dominant_b = EdgeRecord(
+            edge=object(),
+            length_mm=140.0,
+            bounds=Bounds(0.0, 0.0, -100.0, 20.0, 0.0, -100.0),
+            edge_type=CUT_FEATURE,
+        )
+        duplicate = EdgeRecord(
+            edge=object(),
+            length_mm=260.0,
+            bounds=Bounds(2.0, 0.0, -250.0, 2.0, 0.0, -100.0),
+            edge_type=UNCERTAIN,
+        )
+        end_a = EdgeRecord(
+            edge=object(),
+            length_mm=20.0,
+            bounds=Bounds(0.0, 0.0, 250.0, 20.0, 0.0, 250.0),
+            edge_type=UNCERTAIN,
+        )
+        end_b = EdgeRecord(
+            edge=object(),
+            length_mm=15.0,
+            bounds=Bounds(20.0, 0.0, 250.0, 25.0, 0.0, 250.0),
+            edge_type=CUT_END,
+        )
+
+        analysis = _analyze_complex_profile_contour_fallback(
+            (dominant_a, dominant_b, duplicate, end_a, end_b),
+            base_cut_length_mm=120.0,
+            axis="Z",
+            length_mm=500.0,
+            global_bounds=Bounds(0.0, 0.0, -250.0, 40.0, 20.0, 250.0),
+            tolerance=0.1,
+        )
+
+        self.assertEqual(analysis.pierce_count, 2)
+        self.assertEqual(analysis.cut_edges, (dominant_a, dominant_b, end_a, end_b))
+        self.assertEqual(sum(edge.length_mm for edge in analysis.cut_edges), 355.0)
+        self.assertEqual(dominant_a.cut_component_id, 1)
+        self.assertEqual(end_a.cut_component_id, 2)
+        self.assertEqual(end_a.edge_type, CUT_END)
+        self.assertEqual(duplicate.cut_component_id, 0)
 
     def test_profile_tube_prefers_cut_edge_components_when_outer_skin_is_clear(self) -> None:
         self.assertTrue(

@@ -495,11 +495,34 @@ def classify_cut_edges(
                 "по открытым наружным границам оболочки, длина будет уточнена по площади граней реза."
             )
         else:
-            pierce_count_override = (
-                cut_face_edge_component_count
-                if prefer_cut_edge_components
-                else cut_face_analysis.pierce_count
+            complex_profile_contour_analysis = _analyze_complex_profile_contour_fallback(
+                edge_records,
+                base_cut_length_mm=cut_length_override_mm,
+                axis=axis,
+                length_mm=length_mm,
+                global_bounds=global_bounds,
+                tolerance=tolerance,
             )
+            if complex_profile_contour_analysis.cut_edges:
+                cut_edges = complex_profile_contour_analysis.cut_edges
+                cut_length_override_mm = sum(edge.length_mm for edge in cut_edges)
+                pierce_count_override = complex_profile_contour_analysis.pierce_count
+                _suppress_legacy_cut_edges(
+                    edge_records,
+                    selected_cut_edges=cut_edges,
+                )
+                groups = _groups_from_edge_records(edge_records)
+                warnings.append(
+                    "Сложный профильный контур рассчитан fallback-логикой: "
+                    "использован доминирующий полный контур реза и торцевой контур "
+                    "на противоположном конце трубы."
+                )
+            else:
+                pierce_count_override = (
+                    cut_face_edge_component_count
+                    if prefer_cut_edge_components
+                    else cut_face_analysis.pierce_count
+                )
             warnings.append(
                 "Длина реза рассчитана по наружным границам граней стенки реза; "
                 "внутренние кромки толщины и разбиение CAD-граней не суммируются."
@@ -2305,6 +2328,168 @@ def _analyze_cut_faces(
         cut_faces=tuple(selected_records),
         pierce_count=pierce_count,
     )
+
+
+def _analyze_complex_profile_contour_fallback(
+    edge_records: Iterable[EdgeRecord],
+    *,
+    base_cut_length_mm: float,
+    axis: str,
+    length_mm: float,
+    global_bounds: Bounds,
+    tolerance: float,
+) -> CutFaceAnalysis:
+    candidates = tuple(
+        edge
+        for edge in edge_records
+        if edge.length_mm > tolerance
+        and edge.bounds is not None
+        and edge.edge_type
+        not in {IGNORED_LONGITUDINAL, IGNORED_PROFILE, IGNORED_PLANE_RADIUS}
+        and not _looks_like_longitudinal_seam(edge, axis=axis, length_mm=length_mm)
+    )
+    if len(candidates) < 4:
+        return CutFaceAnalysis()
+
+    components = _edge_components_by_bounds_touch(
+        candidates,
+        tolerance=max(tolerance, 0.1),
+    )
+    if len(components) < 2:
+        return CutFaceAnalysis()
+
+    component_infos: list[tuple[tuple[EdgeRecord, ...], float, Bounds]] = []
+    for component in components:
+        bounds = _combined_edge_bounds(component)
+        if bounds is None:
+            continue
+        length = sum(edge.length_mm for edge in component)
+        if length > tolerance:
+            component_infos.append((component, length, bounds))
+    if len(component_infos) < 2:
+        return CutFaceAnalysis()
+
+    dominant_component, dominant_length, dominant_bounds = max(
+        component_infos,
+        key=lambda item: item[1],
+    )
+    if dominant_length < max(base_cut_length_mm * 2.5, 250.0):
+        return CutFaceAnalysis()
+
+    dominant_side = _bounds_touching_axis_end_side(
+        dominant_bounds,
+        axis=axis,
+        global_bounds=global_bounds,
+        tolerance=max(tolerance * 2.0, 0.2),
+    )
+    if dominant_side not in {"min", "max"}:
+        return CutFaceAnalysis()
+    opposite_side = "max" if dominant_side == "min" else "min"
+
+    end_components: list[tuple[EdgeRecord, ...]] = []
+    for component, component_length, bounds in component_infos:
+        if component is dominant_component:
+            continue
+        if component_length <= tolerance:
+            continue
+        side = _bounds_touching_axis_end_side(
+            bounds,
+            axis=axis,
+            global_bounds=global_bounds,
+            tolerance=max(tolerance * 2.0, 0.2),
+        )
+        if side == opposite_side:
+            end_components.append(component)
+
+    end_edges = tuple(edge for component in end_components for edge in component)
+    end_length = sum(edge.length_mm for edge in end_edges)
+    if end_length < max(tolerance * 20.0, 5.0):
+        return CutFaceAnalysis()
+
+    selected_edges = tuple(dominant_component) + end_edges
+    selected_length = sum(edge.length_mm for edge in selected_edges)
+    if selected_length <= base_cut_length_mm * 1.8:
+        return CutFaceAnalysis()
+    if length_mm > tolerance and selected_length > length_mm * 2.5:
+        return CutFaceAnalysis()
+
+    for edge in dominant_component:
+        if edge.edge_type not in CALCULATED_CUT_TYPES:
+            edge.edge_type, edge.reason = _classify_cut_face_edge(
+                edge,
+                axis=axis,
+                global_bounds=global_bounds,
+                tolerance=tolerance,
+            )
+        edge.cut_component_id = 1
+
+    for edge in end_edges:
+        edge.edge_type = CUT_END
+        edge.reason = "CUT_END complex profile opposite end contour"
+        edge.cut_component_id = 2
+
+    return CutFaceAnalysis(
+        cut_edges=selected_edges,
+        pierce_count=2,
+    )
+
+
+def _edge_components_by_bounds_touch(
+    edges: tuple[EdgeRecord, ...],
+    *,
+    tolerance: float,
+) -> tuple[tuple[EdgeRecord, ...], ...]:
+    if not edges:
+        return ()
+
+    parent = list(range(len(edges)))
+
+    def find(index: int) -> int:
+        while parent[index] != index:
+            parent[index] = parent[parent[index]]
+            index = parent[index]
+        return index
+
+    def union(first: int, second: int) -> None:
+        first_root = find(first)
+        second_root = find(second)
+        if first_root != second_root:
+            parent[second_root] = first_root
+
+    point_to_indexes: dict[tuple[int, int, int], list[int]] = {}
+    for index, edge in enumerate(edges):
+        if edge.bounds is None:
+            continue
+        for point in (edge.bounds.mins, edge.bounds.maxes):
+            key = _point_bucket_key(point, tolerance=tolerance)
+            if key is None:
+                continue
+            point_to_indexes.setdefault(key, []).append(index)
+
+    for indexes in point_to_indexes.values():
+        first_index = indexes[0]
+        for index in indexes[1:]:
+            union(first_index, index)
+
+    components: dict[int, list[EdgeRecord]] = {}
+    for index, edge in enumerate(edges):
+        components.setdefault(find(index), []).append(edge)
+    return tuple(tuple(component) for component in components.values())
+
+
+def _bounds_touching_axis_end_side(
+    bounds: Bounds,
+    *,
+    axis: str,
+    global_bounds: Bounds,
+    tolerance: float,
+) -> str | None:
+    axis_index = AXIS_INDEX[axis]
+    if abs(bounds.mins[axis_index] - global_bounds.mins[axis_index]) <= tolerance:
+        return "min"
+    if abs(bounds.maxes[axis_index] - global_bounds.maxes[axis_index]) <= tolerance:
+        return "max"
+    return None
 
 
 def _add_diagonal_profile_side_holes(
