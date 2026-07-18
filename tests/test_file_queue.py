@@ -35,6 +35,7 @@ from cad.edge_classifier import (
     _is_outer_longitudinal_face,
     _is_thickness_face_candidate,
     _prefer_cut_edge_components_for_cut_faces,
+    _round_bbox_should_use_compact_mixed_features,
     _tolerance_from_summary,
     WireRecord,
     estimate_wall_thickness,
@@ -2559,6 +2560,33 @@ END-ISO-10303-21;
                 cut_face_edge_component_count=27,
                 cut_face_pierce_count=27,
                 outer_face_count=5,
+            )
+        )
+
+    def test_round_bbox_compact_mixed_features_are_limited_to_short_dense_tubes(self) -> None:
+        mixed_edges = tuple(EdgeRecord(object(), 10.0) for _index in range(60))
+        outer_edges = (*mixed_edges, *(EdgeRecord(object(), 2.0) for _index in range(120)))
+
+        self.assertTrue(
+            _round_bbox_should_use_compact_mixed_features(
+                outer_only_feature_edges=outer_edges,
+                mixed_feature_edges=mixed_edges,
+                outer_only_length=840.0,
+                mixed_length=600.0,
+                end_length=120.0,
+                outer_radius=25.0,
+                length_mm=200.0,
+            )
+        )
+        self.assertFalse(
+            _round_bbox_should_use_compact_mixed_features(
+                outer_only_feature_edges=outer_edges,
+                mixed_feature_edges=mixed_edges,
+                outer_only_length=840.0,
+                mixed_length=600.0,
+                end_length=120.0,
+                outer_radius=25.0,
+                length_mm=1000.0,
             )
         )
 

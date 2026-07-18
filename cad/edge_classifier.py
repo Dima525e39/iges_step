@@ -113,6 +113,9 @@ class CutFaceAnalysis:
     cut_faces: tuple[ThicknessFaceRecord, ...] = ()
     pierce_count: int = 0
     outer_radius_mm: float = 0.0
+    cut_length_override_mm: float | None = None
+    cut_end_length_override_mm: float | None = None
+    cut_feature_length_override_mm: float | None = None
 
 
 @dataclass(slots=True)
@@ -483,6 +486,10 @@ def classify_cut_edges(
         )
     elif use_round_bspline_bbox_fallback:
         pierce_count_override = round_bspline_bbox_analysis.pierce_count
+        if round_bspline_bbox_analysis.cut_length_override_mm is not None:
+            cut_length_override_mm = round_bspline_bbox_analysis.cut_length_override_mm
+            cut_end_length_override_mm = round_bspline_bbox_analysis.cut_end_length_override_mm
+            cut_feature_length_override_mm = round_bspline_bbox_analysis.cut_feature_length_override_mm
         warnings.append(
             "Круглая труба записана BSpline-поверхностями; расчет выполнен по "
             "наружному bbox-контуру трубы, внутренние кромки толщины не суммируются."
@@ -586,7 +593,13 @@ def classify_cut_edges(
         warnings.append(
             "Толщина трубы определена с невысокой уверенностью; при необходимости задайте ее вручную."
         )
-    if use_shell_open_boundary_fallback:
+    if (
+        use_shell_open_boundary_fallback
+        and not use_round_loop_analysis
+        and not use_round_bspline_bbox_fallback
+        and not use_rotated_profile_fallback
+        and not use_round_edge_fallback
+    ):
         shell_area_length = shell_area_length_override_mm
         if shell_area_length > tolerance:
             cut_length_override_mm = shell_area_length
@@ -1857,9 +1870,20 @@ def _analyze_round_tube_bspline_bbox_fallback(
 
     outer_only_length = sum(edge.length_mm for edge in outer_only_feature_edges)
     mixed_length = sum(edge.length_mm for edge in mixed_feature_edges)
+    end_length = sum(edge.length_mm for edge in cut_edges)
+    use_compact_mixed_features = _round_bbox_should_use_compact_mixed_features(
+        outer_only_feature_edges=tuple(outer_only_feature_edges),
+        mixed_feature_edges=tuple(mixed_feature_edges),
+        outer_only_length=outer_only_length,
+        mixed_length=mixed_length,
+        end_length=end_length,
+        outer_radius=outer_radius,
+        length_mm=length_mm,
+    )
     feature_edges = (
         mixed_feature_edges
-        if mixed_length > max(outer_only_length * 3.0, outer_only_length + outer_radius)
+        if use_compact_mixed_features
+        or mixed_length > max(outer_only_length * 3.0, outer_only_length + outer_radius)
         else outer_only_feature_edges
     )
     selected_feature_ids = {id(edge) for edge in feature_edges}
@@ -1869,27 +1893,66 @@ def _analyze_round_tube_bspline_bbox_fallback(
         edge.edge_type = ""
         edge.reason = ""
         edge.cut_component_id = 0
-    allow_wire_axial_merge = feature_edges is outer_only_feature_edges
-
-    for group in _round_bbox_feature_groups(
-        tuple(feature_edges),
-        axis=axis,
-        tolerance=round_tolerance,
-        allow_wire_axial_merge=allow_wire_axial_merge,
-    ):
-        for edge in group:
+    if use_compact_mixed_features:
+        for edge in feature_edges:
             edge.cut_component_id = component_id
             cut_edges.append(edge)
         component_id += 1
+    else:
+        allow_wire_axial_merge = feature_edges is outer_only_feature_edges
+        for group in _round_bbox_feature_groups(
+            tuple(feature_edges),
+            axis=axis,
+            tolerance=round_tolerance,
+            allow_wire_axial_merge=allow_wire_axial_merge,
+        ):
+            for edge in group:
+                edge.cut_component_id = component_id
+                cut_edges.append(edge)
+            component_id += 1
 
     if not cut_edges:
         return CutFaceAnalysis()
     pierce_count = max(0, component_id - 1)
+    cut_length_override: float | None = None
+    cut_end_length_override: float | None = None
+    cut_feature_length_override: float | None = None
+    if use_compact_mixed_features and end_length > 0.0:
+        cut_end_length_override = end_length
+        cut_feature_length_override = max(0.0, mixed_length - end_length * 2.0)
+        cut_length_override = cut_end_length_override + cut_feature_length_override
+        pierce_count = 2
     return CutFaceAnalysis(
         cut_edges=tuple(cut_edges),
         pierce_count=pierce_count,
         outer_radius_mm=outer_radius,
+        cut_length_override_mm=cut_length_override,
+        cut_end_length_override_mm=cut_end_length_override,
+        cut_feature_length_override_mm=cut_feature_length_override,
     )
+
+
+def _round_bbox_should_use_compact_mixed_features(
+    *,
+    outer_only_feature_edges: tuple[EdgeRecord, ...],
+    mixed_feature_edges: tuple[EdgeRecord, ...],
+    outer_only_length: float,
+    mixed_length: float,
+    end_length: float,
+    outer_radius: float,
+    length_mm: float,
+) -> bool:
+    if not outer_only_feature_edges or not mixed_feature_edges or end_length <= 0.0:
+        return False
+    if len(mixed_feature_edges) < 50:
+        return False
+    if length_mm > max(outer_radius * 12.0, 350.0):
+        return False
+    if outer_only_length <= mixed_length * 1.25:
+        return False
+    if mixed_length <= end_length * 4.0:
+        return False
+    return True
 
 
 def _has_profile_tube_outer_skin(
