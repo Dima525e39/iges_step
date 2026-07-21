@@ -3,9 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtWidgets import QCheckBox, QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QCheckBox, QGridLayout, QLabel, QVBoxLayout, QWidget
 
 from core.file_job import FileJob
+from cad.edge_classifier import CUT_END, CUT_FEATURE
 
 
 MIB = 1024 * 1024
@@ -100,6 +101,9 @@ class Viewer3D(QWidget):
         self._display = None
         self._presentation_cache: dict[str, CachedPresentation] = {}
         self._current_cache_key: str | None = None
+        self._current_shape: object | None = None
+        self._current_title = ""
+        self._current_analysis: object | None = None
 
         self.label = QLabel("Модель не загружена")
         self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -107,32 +111,26 @@ class Viewer3D(QWidget):
 
         self.layers_panel = QWidget()
         self.layers_panel.setObjectName("LayersPanel")
-        layers_layout = QHBoxLayout(self.layers_panel)
+        layers_layout = QGridLayout(self.layers_panel)
         layers_layout.setContentsMargins(6, 4, 6, 4)
+        layers_layout.setHorizontalSpacing(8)
+        layers_layout.setVerticalSpacing(2)
         self.cut_lines_layer = QCheckBox("Линии реза")
+        self.cut_lines_layer.setToolTip("Показать расчетные CUT_FEATURE и CUT_END: вырезы, пазы и торцы.")
         self.cut_lines_layer.setChecked(True)
         self.pierces_layer = QCheckBox("Врезки")
+        self.pierces_layer.setToolTip("Показать зеленые точки начала расчетных контуров.")
         self.pierces_layer.setChecked(True)
-        self.ends_layer = QCheckBox("Торцы")
-        self.ends_layer.setChecked(True)
-        self.ignored_layer = QCheckBox("Игнорированные")
-        self.plane_radius_layer = QCheckBox("Плоскость/радиус")
-        self.uncertain_layer = QCheckBox("Спорные")
-        self.dimensions_layer = QCheckBox("Размеры")
-        self.cut_only_layer = QCheckBox("Только линии реза")
-        for checkbox in (
+        layer_checkboxes = (
             self.cut_lines_layer,
             self.pierces_layer,
-            self.ends_layer,
-            self.ignored_layer,
-            self.plane_radius_layer,
-            self.uncertain_layer,
-            self.dimensions_layer,
-            self.cut_only_layer,
-        ):
-            layers_layout.addWidget(checkbox)
-        layers_layout.addStretch(1)
-        self.cut_only_layer.toggled.connect(self._toggle_cut_only_mode)
+        )
+        for index, checkbox in enumerate(layer_checkboxes):
+            layers_layout.addWidget(checkbox, 0, index)
+        for column in range(2):
+            layers_layout.setColumnStretch(column, 1)
+        for checkbox in layer_checkboxes:
+            checkbox.toggled.connect(self._refresh_visible_layers)
 
         self._layout = QVBoxLayout(self)
         self._layout.setContentsMargins(0, 0, 0, 0)
@@ -145,12 +143,24 @@ class Viewer3D(QWidget):
             return
         self.show_message(f"{job.name}\nИмпортируйте файл, чтобы открыть 3D-просмотр.")
 
-    def show_shape(self, shape: object, title: str = "") -> None:
+    def show_shape(self, shape: object, title: str = "", analysis: object | None = None) -> None:
         if not self._ensure_occ_canvas():
             return
 
+        self._current_shape = shape
+        self._current_title = title
+        self._current_analysis = analysis
+        self._render_current_scene(fit=True)
+
+    def _render_current_scene(self, *, fit: bool) -> None:
+        if self._current_shape is None or self._display is None or self._canvas is None:
+            return
+
         try:
+            shape = self._current_shape
+            title = self._current_title
             cache_key = self._cache_key(shape, title)
+            self._display.EraseAll()
             if not self._display_cached_shape(cache_key):
                 self._display.EraseAll()
                 presentations = list(self._display.DisplayShape(shape, update=False) or [])
@@ -159,14 +169,88 @@ class Viewer3D(QWidget):
                     estimated_bytes=_estimate_presentation_bytes(shape, presentations),
                 )
                 self._trim_presentation_cache(active_key=cache_key)
+            self._display_analysis_edges()
             self._current_cache_key = cache_key
             self._disable_selection_mode()
             self.label.hide()
             self._canvas.show()
-            self._schedule_fit_view()
+            if fit:
+                self._schedule_fit_view()
+            else:
+                self._repaint()
         except Exception as exc:
             name = f"{title}\n" if title else ""
             self.show_message(f"{name}Не удалось показать 3D-модель:\n{exc}")
+
+    def _display_analysis_edges(self) -> None:
+        classification = getattr(self._current_analysis, "edge_classification", None)
+        if classification is None or self._display is None:
+            return
+
+        cut_edges = tuple(getattr(classification, "calculated_cut_edges", ()) or ())
+        feature_edges = tuple(edge for edge in cut_edges if getattr(edge, "edge_type", "") == CUT_FEATURE)
+        end_edges = tuple(edge for edge in cut_edges if getattr(edge, "edge_type", "") == CUT_END)
+
+        if self.cut_lines_layer.isChecked():
+            self._display_edge_records(feature_edges, color="RED", width=5.0)
+            self._display_edge_records(end_edges, color="ORANGE", width=5.0)
+        if self.pierces_layer.isChecked():
+            self._display_pierce_markers(cut_edges)
+
+    def _display_edge_records(self, records: tuple[object, ...], *, color: str, width: float) -> None:
+        if self._display is None:
+            return
+        for record in records:
+            edge = getattr(record, "edge", None)
+            if edge is None:
+                continue
+            try:
+                presentations = self._display.DisplayShape(edge, color=color, update=False) or []
+                for presentation in presentations:
+                    set_width = getattr(presentation, "SetWidth", None)
+                    if set_width is not None:
+                        set_width(width)
+            except Exception:
+                continue
+
+    def _display_pierce_markers(self, records: tuple[object, ...]) -> None:
+        if self._display is None:
+            return
+        seen_components: set[int] = set()
+        for record in records:
+            component_id = int(getattr(record, "cut_component_id", 0) or 0)
+            if component_id <= 0 or component_id in seen_components:
+                continue
+            seen_components.add(component_id)
+            point = getattr(record, "start_point", None) or getattr(record, "end_point", None)
+            if point is None:
+                continue
+            try:
+                from OCC.Core.BRepBuilderAPI import BRepBuilderAPI_MakeVertex
+                from OCC.Core.gp import gp_Pnt
+
+                vertex = BRepBuilderAPI_MakeVertex(
+                    gp_Pnt(float(point[0]), float(point[1]), float(point[2]))
+                ).Vertex()
+                self._display.DisplayShape(vertex, color="GREEN", update=False)
+            except Exception:
+                continue
+
+    def _repaint(self) -> None:
+        if self._display is not None:
+            repaint = getattr(self._display, "Repaint", None)
+            if repaint is not None:
+                try:
+                    repaint()
+                except Exception:
+                    pass
+        if self._canvas is not None:
+            self._canvas.update()
+
+    def _refresh_visible_layers(self, *_args: object) -> None:
+        if self._current_shape is None or self._display is None:
+            return
+        self._render_current_scene(fit=False)
 
     def _cache_key(self, shape: object, title: str) -> str:
         return f"{title or '<shape>'}:{id(shape)}"
@@ -263,6 +347,9 @@ class Viewer3D(QWidget):
         if self._canvas is not None:
             self._canvas.hide()
         self._current_cache_key = None
+        self._current_shape = None
+        self._current_title = ""
+        self._current_analysis = None
         self.label.setText(message)
         self.label.show()
 
@@ -363,14 +450,3 @@ class Viewer3D(QWidget):
             context.Deactivate()
         except Exception:
             pass
-
-    def _toggle_cut_only_mode(self, enabled: bool) -> None:
-        for checkbox in (
-            self.pierces_layer,
-            self.ends_layer,
-            self.ignored_layer,
-            self.plane_radius_layer,
-            self.uncertain_layer,
-            self.dimensions_layer,
-        ):
-            checkbox.setEnabled(not enabled)

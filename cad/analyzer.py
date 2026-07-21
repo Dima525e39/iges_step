@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, fields, is_dataclass
 from pathlib import Path
 
 from cad.debug_faces import write_debug_faces_csv
@@ -49,9 +49,16 @@ class GeometryAnalysisResult:
     debug_faces_path: str = ""
     warnings: tuple[str, ...] = ()
     sheet_analysis: SheetAnalysisResult | None = None
+    edge_classification: object | None = None
 
     def as_dict(self) -> dict[str, object]:
-        return asdict(self)
+        result: dict[str, object] = {}
+        for item in fields(self):
+            if item.name == "edge_classification":
+                continue
+            value = getattr(self, item.name)
+            result[item.name] = asdict(value) if is_dataclass(value) else value
+        return result
 
     def to_text(self) -> str:
         lines = [
@@ -405,6 +412,7 @@ def analyze_shape(
         debug_faces_path=written_debug_faces_path,
         warnings=tuple(warnings),
         sheet_analysis=sheet_analysis,
+        edge_classification=classification if shape is not None else None,
     )
 
 

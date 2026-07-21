@@ -3,10 +3,11 @@ from __future__ import annotations
 from dataclasses import asdict
 from pathlib import Path
 
-from PySide6.QtCore import QThread, Qt
+from PySide6.QtCore import QThread, QTimer, Qt
 from PySide6.QtGui import QDragEnterEvent, QDragLeaveEvent, QDragMoveEvent, QDropEvent
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QCheckBox,
     QDialog,
     QFileDialog,
@@ -98,10 +99,10 @@ class MainWindow(QMainWindow):
         self.geometry_debug_dialog: GeometryDebugDialog | None = None
         self._shown_3d_path: str | None = None
         self._shown_2d_path: str | None = None
+        self._initial_screen_fit_done = False
 
         self.setAcceptDrops(True)
         self.setWindowTitle(f"{APP_NAME} {build_label()}")
-        self.resize(1360, 820)
 
         self.drop_root = QFrame()
         self.drop_root.setObjectName("DropRoot")
@@ -110,10 +111,44 @@ class MainWindow(QMainWindow):
         install_top_menu(self)
         self._build_ui()
         self._apply_current_theme()
+        self._fit_to_screen()
         self._connect_signals()
         self._refresh_jobs()
 
         self.statusBar().showMessage(f"{APP_NAME} {build_label()}")
+
+    def showEvent(self, event: object) -> None:
+        super().showEvent(event)
+        if self._initial_screen_fit_done:
+            return
+        self._initial_screen_fit_done = True
+        QTimer.singleShot(0, self._fit_to_screen)
+        QTimer.singleShot(150, self._fit_to_screen)
+
+    def _fit_to_screen(self) -> None:
+        screen = self.screen() or QApplication.primaryScreen()
+        if screen is None:
+            self.resize(1200, 720)
+            return
+
+        available = screen.availableGeometry()
+        safe_width = max(320, available.width() - 24)
+        safe_height = max(320, available.height() - 48)
+        width = min(1360, safe_width, max(760, int(available.width() * 0.92)))
+        height = min(820, safe_height, max(520, int(available.height() * 0.88)))
+        self.resize(width, height)
+
+        frame = self.frameGeometry()
+        frame.moveCenter(available.center())
+        if frame.left() < available.left():
+            frame.moveLeft(available.left())
+        if frame.top() < available.top():
+            frame.moveTop(available.top())
+        if frame.right() > available.right():
+            frame.moveRight(available.right())
+        if frame.bottom() > available.bottom():
+            frame.moveBottom(available.bottom())
+        self.move(frame.topLeft())
 
     def _build_ui(self) -> None:
         root_layout = QVBoxLayout(self.drop_root)
@@ -134,7 +169,7 @@ class MainWindow(QMainWindow):
         content_splitter.setChildrenCollapsible(False)
 
         bottom_panel = self._build_bottom_panel()
-        bottom_panel.setMinimumHeight(84)
+        bottom_panel.setMinimumHeight(72)
 
         self.vertical_splitter = QSplitter(Qt.Orientation.Vertical)
         self.vertical_splitter.addWidget(content_splitter)
@@ -142,12 +177,12 @@ class MainWindow(QMainWindow):
         self.vertical_splitter.setStretchFactor(0, 3)
         self.vertical_splitter.setStretchFactor(1, 1)
         self.vertical_splitter.setChildrenCollapsible(False)
-        self.vertical_splitter.setSizes([640, 96])
+        self.vertical_splitter.setSizes([520, 84])
         root_layout.addWidget(self.vertical_splitter, stretch=1)
 
     def _build_left_panel(self) -> QWidget:
         panel = QWidget()
-        panel.setMinimumWidth(320)
+        panel.setMinimumWidth(280)
         panel.setMaximumWidth(420)
         layout = QVBoxLayout(panel)
 
@@ -195,7 +230,7 @@ class MainWindow(QMainWindow):
 
     def _build_right_panel(self) -> QWidget:
         outer_panel = QWidget()
-        outer_panel.setMinimumWidth(320)
+        outer_panel.setMinimumWidth(280)
         outer_panel.setMaximumWidth(460)
         outer_layout = QVBoxLayout(outer_panel)
         outer_layout.setContentsMargins(0, 0, 0, 0)
@@ -1453,7 +1488,7 @@ class MainWindow(QMainWindow):
             elif shape is None:
                 self.viewer_3d.show_message(f"{job.name}\nDXF-лист открыт в 2D.")
             else:
-                self.viewer_3d.show_shape(shape, job.name)
+                self.viewer_3d.show_shape(shape, job.name, analysis=analysis)
             self._shown_3d_path = path
             return
 
