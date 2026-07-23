@@ -755,6 +755,54 @@ class GeometryAnalyzerTests(unittest.TestCase):
             any("Сечение трубы уточнено" in warning for warning in result.warnings)
         )
 
+    def test_profile_size_uses_local_square_face_for_slanted_surface_tube(self) -> None:
+        import cad.analyzer as analyzer_module
+
+        original_classify = analyzer_module.classify_cut_edges
+
+        def fake_classification(*args, **kwargs):
+            return EdgeClassificationResult(
+                cut_edges=(),
+                all_edge_count=0,
+                outer_face_count=2,
+                face_records=(
+                    FaceRecord(
+                        object(),
+                        Bounds(0.0, 0.0, 0.0, 15.0, 0.0, 17.885),
+                        False,
+                    ),
+                    FaceRecord(
+                        object(),
+                        Bounds(0.0, 0.0, 0.0, 84.111, 111.422, 1.5),
+                        True,
+                    ),
+                ),
+            )
+
+        analyzer_module.classify_cut_edges = fake_classification
+        try:
+            result = analyze_shape(
+                object(),
+                summary=ShapeSummary(
+                    diagonal_mm=112.8,
+                    size_x_mm=84.111,
+                    size_y_mm=111.422,
+                    size_z_mm=17.418,
+                    face_count=29,
+                    edge_count=684,
+                ),
+                file_format="IGES",
+            )
+        finally:
+            analyzer_module.classify_cut_edges = original_classify
+
+        self.assertEqual(result.width_mm, 15.0)
+        self.assertEqual(result.height_mm, 15.0)
+        self.assertEqual(result.profile_hint, "Квадратная профильная труба")
+        self.assertTrue(
+            any("Сечение трубы уточнено" in warning for warning in result.warnings)
+        )
+
     def test_outer_longitudinal_face_uses_orientation_not_length_fraction(self) -> None:
         # Envelope of a 25x25 tube, 1000 mm long along Z.
         gb = Bounds(0.0, 0.0, 0.0, 25.0, 25.0, 1000.0)
@@ -2483,6 +2531,110 @@ END-ISO-10303-21;
         self.assertEqual(analysis.cut_edges, (stitched_edge,))
         self.assertEqual(analysis.pierce_count, 1)
         self.assertEqual(stitched_edge.edge_type, CUT_FEATURE)
+
+    def test_shell_open_boundary_fallback_ignores_tiny_thickness_fragments(self) -> None:
+        face = FaceRecord(
+            face=object(),
+            bounds=Bounds(0.0, 0.0, 0.0, 20.0, 20.0, 0.0),
+            is_outer_longitudinal=False,
+        )
+        base_edge = EdgeRecord(
+            edge=object(),
+            length_mm=20.0,
+            bounds=Bounds(0.0, 0.0, 0.0, 20.0, 0.0, 0.0),
+            faces=[face],
+            edge_type=CUT_FEATURE,
+            cut_component_id=1,
+        )
+        normal_edges = tuple(
+            EdgeRecord(
+                edge=object(),
+                length_mm=length,
+                bounds=Bounds(offset, 0.0, 100.0, offset + length, 0.0, 100.0),
+                start_point=(offset, 0.0, 100.0),
+                end_point=(offset + length, 0.0, 100.0),
+                faces=[face],
+            )
+            for offset, length in ((100.0, 33.0), (200.0, 10.5), (300.0, 12.3))
+        )
+        tiny_edges = tuple(
+            EdgeRecord(
+                edge=object(),
+                length_mm=1.5,
+                bounds=Bounds(offset, 0.0, 100.0, offset + 1.5, 0.0, 100.0),
+                start_point=(offset, 0.0, 100.0),
+                end_point=(offset + 1.5, 0.0, 100.0),
+                faces=[face],
+            )
+            for offset in (400.0, 410.0, 420.0)
+        )
+
+        analysis = _analyze_shell_open_boundary_fallback(
+            normal_edges + tiny_edges,
+            base_cut_edges=(base_edge,),
+            base_pierce_count=1,
+            axis="Z",
+            length_mm=500.0,
+            tolerance=0.1,
+        )
+
+        self.assertEqual(analysis.pierce_count, 5)
+        self.assertEqual(len(analysis.cut_edges), 7)
+        self.assertEqual(tiny_edges[0].cut_component_id, tiny_edges[1].cut_component_id)
+
+    def test_cut_face_analysis_ignores_tiny_single_edge_thickness_fragments(self) -> None:
+        outer_face = FaceRecord(
+            face=object(),
+            bounds=Bounds(0.0, 0.0, 0.0, 20.0, 0.0, 500.0),
+            is_outer_longitudinal=True,
+        )
+
+        def record_for_edge(offset: float, length: float) -> ThicknessFaceRecord:
+            face = FaceRecord(
+                face=object(),
+                bounds=Bounds(offset, 0.0, 100.0, offset + length, 1.5, 100.0),
+                is_outer_longitudinal=False,
+            )
+            edge = EdgeRecord(
+                edge=object(),
+                length_mm=length,
+                bounds=Bounds(offset, 0.0, 100.0, offset + length, 0.0, 100.0),
+                start_point=(offset, 0.0, 100.0),
+                end_point=(offset + length, 0.0, 100.0),
+                faces=[face, outer_face],
+            )
+            return ThicknessFaceRecord(
+                face=face,
+                area_mm2=length * 1.5,
+                thickness_mm=1.5,
+                cut_length_mm=length,
+                edges=(edge,),
+            )
+
+        records = tuple(
+            record_for_edge(offset, length)
+            for offset, length in (
+                (100.0, 33.0),
+                (200.0, 10.5),
+                (300.0, 12.3),
+                (400.0, 9.0),
+                (500.0, 1.5),
+                (510.0, 1.5),
+                (520.0, 1.5),
+            )
+        )
+
+        analysis = _analyze_cut_faces(
+            records,
+            axis="Z",
+            length_mm=500.0,
+            global_bounds=Bounds(0.0, 0.0, 0.0, 600.0, 20.0, 500.0),
+            tolerance=0.1,
+        )
+
+        self.assertEqual(analysis.pierce_count, 4)
+        self.assertEqual(len(analysis.cut_edges), 4)
+        self.assertEqual(len(analysis.cut_faces), 4)
 
     def test_complex_profile_contour_fallback_uses_dominant_and_opposite_end(self) -> None:
         dominant_a = EdgeRecord(

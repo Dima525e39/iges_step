@@ -454,6 +454,14 @@ def _refine_profile_from_faces(
     ):
         return rotated_side, rotated_side
 
+    local_square_side = _local_square_profile_side_candidate_from_faces(
+        face_records,
+        known_side=known_side,
+        current_width=current_width,
+    )
+    if local_square_side > 0.0:
+        return local_square_side, local_square_side
+
     if known_side <= 0.0 or current_width <= known_side * 2.5:
         return None
 
@@ -470,6 +478,37 @@ def _refine_profile_from_faces(
     if refined[0] >= current_width * 0.75:
         return None
     return refined[0], refined[1]
+
+
+def _local_square_profile_side_candidate_from_faces(
+    face_records: object,
+    *,
+    known_side: float,
+    current_width: float,
+) -> float:
+    if known_side <= 0.0 or current_width <= known_side * 2.5:
+        return 0.0
+
+    candidates: list[float] = []
+    for face in face_records:
+        bounds = getattr(face, "bounds", None)
+        if bounds is None:
+            continue
+        sizes = sorted(size for size in bounds.sizes if size > 0.001)
+        if len(sizes) != 2:
+            continue
+        small, large = sizes
+        if small <= 0.0:
+            continue
+        if not (known_side * 0.70 <= small <= known_side * 1.05):
+            continue
+        if large > known_side * 1.35:
+            continue
+        candidates.append(small)
+
+    if not candidates:
+        return 0.0
+    return min(candidates, key=lambda value: abs(value - known_side))
 
 
 def _profile_side_candidate_from_faces(

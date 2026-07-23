@@ -130,6 +130,7 @@ class RoundTubeLoopAnalysis:
 class ShellOpenBoundaryAnalysis:
     cut_edges: tuple[EdgeRecord, ...] = ()
     pierce_count: int = 0
+    has_merged_tiny_fragments: bool = False
 
 
 @dataclass(slots=True)
@@ -370,8 +371,15 @@ def classify_cut_edges(
     use_round_edge_fallback = bool(round_edge_fallback_analysis.cut_edges)
     use_shell_open_boundary_fallback = (
         bool(shell_open_boundary_analysis.cut_edges)
-        and shell_open_boundary_analysis.pierce_count
-        >= max(cut_face_analysis.pierce_count + 3, 4)
+        and (
+            shell_open_boundary_analysis.pierce_count
+            >= max(cut_face_analysis.pierce_count + 3, 4)
+            or (
+                shell_open_boundary_analysis.has_merged_tiny_fragments
+                and shell_open_boundary_analysis.pierce_count
+                > cut_face_analysis.pierce_count
+            )
+        )
     )
     if use_round_loop_analysis:
         _suppress_legacy_cut_edges(
@@ -425,8 +433,15 @@ def classify_cut_edges(
             not prefer_cut_edge_components
             and
             bool(shell_open_boundary_analysis.cut_edges)
-            and shell_open_boundary_analysis.pierce_count
-            >= max(cut_face_analysis.pierce_count + 3, 4)
+            and (
+                shell_open_boundary_analysis.pierce_count
+                >= max(cut_face_analysis.pierce_count + 3, 4)
+                or (
+                    shell_open_boundary_analysis.has_merged_tiny_fragments
+                    and shell_open_boundary_analysis.pierce_count
+                    > cut_face_analysis.pierce_count
+                )
+            )
         )
         if use_shell_open_boundary_fallback:
             _suppress_legacy_cut_edges(
@@ -2384,8 +2399,23 @@ def _analyze_cut_faces(
             edge.cut_component_id = component_id
             cut_edges.append(edge)
 
+    cut_edges = list(
+        _remove_tiny_single_edge_cut_components(
+            tuple(cut_edges),
+            tolerance=tolerance,
+        )
+    )
+    selected_component_ids = {
+        edge.cut_component_id for edge in cut_edges if edge.cut_component_id > 0
+    }
+    selected_records = [
+        record
+        for record, component_id in zip(selected_records, selected_components)
+        if component_id in selected_component_ids
+    ]
+
     # Count one pierce per connected group that surfaces on the outer skin.
-    pierce_count = len({component for component in selected_components if component > 0})
+    pierce_count = _renumber_cut_components(tuple(cut_edges))
     return CutFaceAnalysis(
         cut_edges=tuple(cut_edges),
         cut_faces=tuple(selected_records),
@@ -2773,6 +2803,10 @@ def _analyze_shell_open_boundary_fallback(
         )
         merged_components = open_components + stitched_components
 
+    merged_components, has_merged_tiny_fragments = _filter_tiny_shell_open_boundary_components(
+        merged_components,
+        tolerance=tolerance,
+    )
     if not merged_components:
         return ShellOpenBoundaryAnalysis()
 
@@ -2792,6 +2826,7 @@ def _analyze_shell_open_boundary_fallback(
     return ShellOpenBoundaryAnalysis(
         cut_edges=tuple(selected),
         pierce_count=max(base_pierce_count, 0) + len(merged_components),
+        has_merged_tiny_fragments=has_merged_tiny_fragments,
     )
 
 
@@ -2826,6 +2861,33 @@ def _shell_open_boundary_components(
     if not merged_components:
         return ()
     return merged_components
+
+
+def _filter_tiny_shell_open_boundary_components(
+    components: tuple[tuple[EdgeRecord, ...], ...],
+    *,
+    tolerance: float,
+) -> tuple[tuple[tuple[EdgeRecord, ...], ...], bool]:
+    if len(components) < 2:
+        return components, False
+
+    lengths = tuple(sum(edge.length_mm for edge in component) for component in components)
+    largest = max(lengths, default=0.0)
+    if largest <= tolerance:
+        return components, False
+
+    tiny_limit = max(tolerance * 20.0, min(8.0, largest * 0.08))
+    normal_components: list[tuple[EdgeRecord, ...]] = []
+    tiny_edges: list[EdgeRecord] = []
+    for component, length in zip(components, lengths):
+        if len(component) == 1 and length <= tiny_limit:
+            tiny_edges.extend(component)
+            continue
+        normal_components.append(component)
+
+    if len(tiny_edges) < 2:
+        return components, False
+    return (*normal_components, tuple(tiny_edges)), True
 
 
 def _stitched_shell_min_cut_length(
@@ -3009,6 +3071,47 @@ def _renumber_cut_components(edges: tuple[EdgeRecord, ...]) -> int:
             old_to_new[old_component] = len(old_to_new) + 1
         edge.cut_component_id = old_to_new[old_component]
     return len(old_to_new)
+
+
+def _remove_tiny_single_edge_cut_components(
+    edges: tuple[EdgeRecord, ...],
+    *,
+    tolerance: float,
+) -> tuple[EdgeRecord, ...]:
+    component_edges: dict[int, list[EdgeRecord]] = {}
+    for edge in edges:
+        if edge.cut_component_id <= 0:
+            continue
+        component_edges.setdefault(edge.cut_component_id, []).append(edge)
+    if len(component_edges) < 4:
+        return edges
+
+    component_lengths = {
+        component_id: sum(edge.length_mm for edge in component)
+        for component_id, component in component_edges.items()
+    }
+    largest = max(component_lengths.values(), default=0.0)
+    if largest <= tolerance:
+        return edges
+
+    tiny_limit = max(tolerance * 20.0, min(8.0, largest * 0.08))
+    tiny_components = {
+        component_id
+        for component_id, component in component_edges.items()
+        if len(component) == 1 and component_lengths.get(component_id, 0.0) <= tiny_limit
+    }
+    if len(tiny_components) < 2:
+        return edges
+
+    kept_edges: list[EdgeRecord] = []
+    for edge in edges:
+        if edge.cut_component_id not in tiny_components:
+            kept_edges.append(edge)
+            continue
+        edge.edge_type = UNCERTAIN
+        edge.reason = "ignored tiny single-edge thickness fragment"
+        edge.cut_component_id = 0
+    return tuple(kept_edges)
 
 
 def _looks_like_diagonal_profile_bbox(
