@@ -31,6 +31,8 @@ class UnfoldingPreview:
     pierce_count: int
     segments: tuple[UnfoldedSegment, ...]
     calculated_cut_segments: tuple[UnfoldedSegment, ...] = ()
+    supplemental_cut_segments: tuple[UnfoldedSegment, ...] = ()
+    reconstructed_cut_segments: tuple[UnfoldedSegment, ...] = ()
     auxiliary_unfold_segments: tuple[UnfoldedSegment, ...] = ()
     ignored_longitudinal_segments: tuple[UnfoldedSegment, ...] = ()
     ignored_profile_segments: tuple[UnfoldedSegment, ...] = ()
@@ -92,6 +94,8 @@ def build_unfolding_preview(
         diagnostic_edge_length_mm=classification.diagnostic_edge_length_mm,
         pierce_count=classification.pierce_count or 0,
         tolerance=tolerance,
+        supplemental_cut_edges=classification.supplemental_cut_edges,
+        reconstructed_cut_edges=classification.reconstructed_cut_edges,
         ignored_longitudinal_edges=classification.ignored_longitudinal_edges,
         ignored_profile_edges=classification.ignored_profile_edges,
         ignored_plane_radius_edges=classification.ignored_plane_radius_edges,
@@ -108,6 +112,8 @@ def build_unfolding_preview_from_edges(
     cut_length_mm: float,
     pierce_count: int,
     tolerance: float,
+    supplemental_cut_edges: tuple[object, ...] | list[object] = (),
+    reconstructed_cut_edges: tuple[object, ...] | list[object] = (),
     diagnostic_edge_length_mm: float = 0.0,
     ignored_longitudinal_edges: tuple[object, ...] | list[object] = (),
     ignored_profile_edges: tuple[object, ...] | list[object] = (),
@@ -130,6 +136,18 @@ def build_unfolding_preview_from_edges(
         global_bounds=global_bounds,
         component_ids=component_ids,
         default_edge_type=CUT_FEATURE,
+    )
+    supplemental_cut_segments = _segments_from_edges(
+        supplemental_cut_edges,
+        axis=axis,
+        global_bounds=global_bounds,
+        default_edge_type=CUT_FEATURE,
+    )
+    reconstructed_cut_segments = _segments_from_edges(
+        reconstructed_cut_edges,
+        axis=axis,
+        global_bounds=global_bounds,
+        default_edge_type="RECONSTRUCTED_CUT",
     )
     auxiliary_unfold_segments = _auxiliary_unfold_segments(
         length_mm=length_mm,
@@ -168,6 +186,8 @@ def build_unfolding_preview_from_edges(
         pierce_count=pierce_count,
         segments=calculated_cut_segments,
         calculated_cut_segments=calculated_cut_segments,
+        supplemental_cut_segments=supplemental_cut_segments,
+        reconstructed_cut_segments=reconstructed_cut_segments,
         auxiliary_unfold_segments=auxiliary_unfold_segments,
         ignored_longitudinal_segments=ignored_longitudinal_segments,
         ignored_profile_segments=ignored_profile_segments,

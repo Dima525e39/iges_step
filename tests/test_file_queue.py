@@ -26,6 +26,7 @@ from cad.edge_classifier import (
     _analyze_round_tube_edge_fallback,
     _analyze_round_tube_outer_loops,
     _analyze_shell_open_boundary_fallback,
+    _build_highlight_cut_edges,
     _classify_edge_groups,
     _collect_thickness_outer_cut_edges,
     _count_cut_edge_components,
@@ -36,6 +37,7 @@ from cad.edge_classifier import (
     _is_thickness_face_candidate,
     _prefer_cut_edge_components_for_cut_faces,
     _round_bbox_should_use_compact_mixed_features,
+    _should_use_shell_area_length_override,
     _tolerance_from_summary,
     WireRecord,
     estimate_wall_thickness,
@@ -916,6 +918,34 @@ class GeometryAnalyzerTests(unittest.TestCase):
             )
         )
 
+    def test_cut_edge_candidate_rejects_slanted_longitudinal_tube_seam(self) -> None:
+        outer_face = FaceRecord(
+            face=object(),
+            bounds=Bounds(-1304.0, 44.0, 3978.0, -1200.0, 44.0, 5984.0),
+            is_outer_longitudinal=True,
+        )
+        cut_face = FaceRecord(
+            face=object(),
+            bounds=Bounds(-1304.0, 40.0, 3978.0, -1200.0, 44.0, 5984.0),
+            is_outer_longitudinal=False,
+        )
+        slanted_longitudinal_edge = EdgeRecord(
+            edge=object(),
+            length_mm=2008.0,
+            bounds=Bounds(-1304.0, 44.0, 3978.0, -1200.0, 44.0, 5984.0),
+            faces=[outer_face, cut_face],
+        )
+
+        self.assertFalse(
+            _is_cut_edge_candidate(
+                slanted_longitudinal_edge,
+                axis="X",
+                length_mm=2105.0,
+                has_outer_faces=True,
+                tolerance=0.1,
+            )
+        )
+
     def test_classify_edge_groups_counts_only_cut_feature_and_cut_end(self) -> None:
         outer_face = FaceRecord(
             face=object(),
@@ -1501,6 +1531,119 @@ class GeometryAnalyzerTests(unittest.TestCase):
         self.assertEqual(len(analysis.cut_edges), len(base_edges) + len(side_holes))
         self.assertTrue(all(edge.edge_type == CUT_FEATURE for edge in side_holes))
         self.assertTrue(all(edge.edge_type == UNCERTAIN for edge in inner_thickness_loops))
+
+    def test_diagonal_profile_side_hole_fallback_skips_existing_cut_copy(self) -> None:
+        base_edge = EdgeRecord(
+            object(),
+            35.7,
+            bounds=Bounds(100.0, 50.0, 100.0, 114.0, 50.0, 109.0),
+            edge_type=CUT_FEATURE,
+            cut_component_id=1,
+        )
+        vertices = tuple(FakeVertex(f"duplicate-{index}") for index in range(4))
+        duplicate_edges = tuple(
+            EdgeRecord(
+                object(),
+                3.0,
+                bounds=Bounds(100.0, 46.0, 100.0, 104.0, 50.0, 104.0),
+                start_vertex=vertices[index],
+                end_vertex=vertices[(index + 1) % 4],
+                wire_roles={"inner_wire", "outer_wire_cut"},
+                edge_type=UNCERTAIN,
+            )
+            for index in range(4)
+        )
+
+        analysis = _add_diagonal_profile_side_holes(
+            CutFaceAnalysis(cut_edges=(base_edge,), pierce_count=1),
+            (base_edge, *duplicate_edges),
+            axis="X",
+            global_bounds=Bounds(0.0, -50.0, 0.0, 1885.0, 50.0, 1770.0),
+            tolerance=0.01,
+        )
+
+        self.assertEqual(analysis.pierce_count, 1)
+        self.assertEqual(analysis.cut_edges, (base_edge,))
+        self.assertAlmostEqual(analysis.cut_length_override_mm or 0.0, 47.7)
+        self.assertTrue(all(edge.edge_type == UNCERTAIN for edge in duplicate_edges))
+
+    def test_diagonal_profile_side_hole_fallback_merges_contained_fragments(self) -> None:
+        base_edge = EdgeRecord(
+            object(),
+            35.7,
+            bounds=Bounds(500.0, 50.0, 500.0, 514.0, 50.0, 509.0),
+            edge_type=CUT_FEATURE,
+            cut_component_id=1,
+        )
+
+        def fragment(name: str, bounds: Bounds) -> tuple[EdgeRecord, ...]:
+            vertices = tuple(FakeVertex(f"{name}-{index}") for index in range(4))
+            return tuple(
+                EdgeRecord(
+                    object(),
+                    3.0,
+                    bounds=bounds,
+                    start_vertex=vertices[index],
+                    end_vertex=vertices[(index + 1) % 4],
+                    wire_roles={"inner_wire", "outer_wire_cut"},
+                    edge_type=UNCERTAIN,
+                )
+                for index in range(4)
+            )
+
+        first = fragment("first", Bounds(100.0, -28.0, 100.0, 114.0, -18.0, 114.0))
+        second = fragment("second", Bounds(102.0, -27.0, 102.0, 112.0, -19.0, 112.0))
+
+        analysis = _add_diagonal_profile_side_holes(
+            CutFaceAnalysis(cut_edges=(base_edge,), pierce_count=1),
+            (base_edge, *first, *second),
+            axis="X",
+            global_bounds=Bounds(0.0, -50.0, 0.0, 1885.0, 50.0, 1770.0),
+            tolerance=0.01,
+        )
+
+        self.assertEqual(analysis.pierce_count, 2)
+        self.assertEqual(len(analysis.cut_edges), 1 + len(first) + len(second))
+        self.assertEqual({edge.cut_component_id for edge in (*first, *second)}, {2})
+        self.assertAlmostEqual(analysis.cut_length_override_mm or 0.0, 59.7)
+
+    def test_diagonal_profile_side_hole_fallback_keeps_near_components_separate(self) -> None:
+        base_edge = EdgeRecord(
+            object(),
+            35.7,
+            bounds=Bounds(500.0, 50.0, 500.0, 514.0, 50.0, 509.0),
+            edge_type=CUT_FEATURE,
+            cut_component_id=1,
+        )
+
+        def component(name: str, bounds: Bounds) -> tuple[EdgeRecord, ...]:
+            vertices = tuple(FakeVertex(f"{name}-{index}") for index in range(4))
+            return tuple(
+                EdgeRecord(
+                    object(),
+                    3.0,
+                    bounds=bounds,
+                    start_vertex=vertices[index],
+                    end_vertex=vertices[(index + 1) % 4],
+                    wire_roles={"inner_wire", "outer_wire_cut"},
+                    edge_type=UNCERTAIN,
+                )
+                for index in range(4)
+            )
+
+        first = component("first", Bounds(100.0, -28.0, 100.0, 104.0, -22.0, 104.0))
+        second = component("second", Bounds(106.0, -28.0, 104.0, 110.0, -22.0, 108.0))
+
+        analysis = _add_diagonal_profile_side_holes(
+            CutFaceAnalysis(cut_edges=(base_edge,), pierce_count=1),
+            (base_edge, *first, *second),
+            axis="X",
+            global_bounds=Bounds(0.0, -50.0, 0.0, 1885.0, 50.0, 1770.0),
+            tolerance=0.01,
+        )
+
+        self.assertEqual(analysis.pierce_count, 3)
+        self.assertNotEqual(first[0].cut_component_id, second[0].cut_component_id)
 
     def test_round_split_surface_tube_uses_half_cylinder_bbox(self) -> None:
         faces = (
@@ -2163,14 +2306,24 @@ END-ISO-10303-21;
             edge_type=IGNORED_LONGITUDINAL,
             reason="ignored longitudinal tube edge",
         )
+        supplemental_edge = EdgeRecord(
+            edge=object(),
+            length_mm=12.0,
+            edge_type="SUPPLEMENTAL_CUT",
+            reason="SUPPLEMENTAL_CUT linked shell segment",
+        )
         classification = EdgeClassificationResult(
             cut_edges=(cut_edge,),
-            all_edge_count=2,
+            all_edge_count=3,
             outer_face_count=1,
             calculated_cut_edges=(cut_edge,),
+            supplemental_cut_edges=(supplemental_edge,),
             ignored_longitudinal_edges=(ignored_edge,),
-            edge_records=(cut_edge, ignored_edge),
+            edge_records=(cut_edge, supplemental_edge, ignored_edge),
         )
+
+        self.assertEqual(classification.visual_cut_edges, (cut_edge, supplemental_edge))
+        self.assertAlmostEqual(classification.visual_cut_length_mm, 42.0)
 
         with TemporaryDirectory() as temp_dir:
             target = Path(temp_dir) / "debug_edges.csv"
@@ -2186,9 +2339,85 @@ END-ISO-10303-21;
             content,
         )
         self.assertIn(
-            "part.step,v0.5.5,local,round-iges-fallback-v2,2,1000.000000,IGNORED_LONGITUDINAL,no",
+            "part.step,v0.5.5,local,round-iges-fallback-v2,2,12.000000,SUPPLEMENTAL_CUT,yes",
             content,
         )
+        self.assertIn(
+            "part.step,v0.5.5,local,round-iges-fallback-v2,3,1000.000000,IGNORED_LONGITUDINAL,no",
+            content,
+        )
+
+    def test_highlight_geometry_uses_visible_hole_on_slanted_outer_wall(self) -> None:
+        diagonal = 2.0**-0.5
+
+        def point(axial: float, across: float, depth: float) -> tuple[float, float, float]:
+            return (
+                axial * diagonal - depth * diagonal,
+                across,
+                axial * diagonal + depth * diagonal,
+            )
+
+        outer_face = FaceRecord(
+            face=object(),
+            bounds=Bounds(-50.0, -50.0, 0.0, 750.0, 50.0, 750.0),
+            is_outer_longitudinal=False,
+        )
+
+        def record(
+            start: tuple[float, float, float],
+            end: tuple[float, float, float],
+            *,
+            length: float,
+            faces: list[FaceRecord] | None = None,
+            inner: bool = False,
+        ) -> EdgeRecord:
+            return EdgeRecord(
+                edge=object(),
+                length_mm=length,
+                start_point=start,
+                end_point=end,
+                faces=list(faces or ()),
+                wire_roles={"inner_wire"} if inner else set(),
+            )
+
+        wall_edges = (
+            record(point(0.0, -50.0, 50.0), point(1000.0, -50.0, 50.0), length=1000.0, faces=[outer_face]),
+            record(point(0.0, 50.0, 50.0), point(1000.0, 50.0, 50.0), length=1000.0, faces=[outer_face]),
+            record(point(0.0, -50.0, 50.0), point(0.0, 50.0, 50.0), length=100.0, faces=[outer_face]),
+            record(point(1000.0, -50.0, 50.0), point(1000.0, 50.0, 50.0), length=100.0, faces=[outer_face]),
+        )
+        hole_edges = (
+            record(point(495.0, -5.0, 50.0), point(505.0, -5.0, 50.0), length=10.0, faces=[outer_face], inner=True),
+            record(point(505.0, -5.0, 50.0), point(505.0, 5.0, 50.0), length=10.0, faces=[outer_face], inner=True),
+            record(point(505.0, 5.0, 50.0), point(495.0, 5.0, 50.0), length=10.0, faces=[outer_face], inner=True),
+            record(point(495.0, 5.0, 50.0), point(495.0, -5.0, 50.0), length=10.0, faces=[outer_face], inner=True),
+        )
+        opposite_depth_edge = record(
+            point(0.0, -50.0, -50.0),
+            point(0.0, 50.0, -50.0),
+            length=100.0,
+        )
+        end_min = record(point(0.0, -50.0, 50.0), point(0.0, 50.0, 50.0), length=100.0)
+        end_max = record(point(1000.0, -50.0, 50.0), point(1000.0, 50.0, 50.0), length=100.0)
+        bogus = record(point(450.0, -2.0, 0.0), point(452.0, 2.0, 0.0), length=5.0)
+
+        highlight_edges = _build_highlight_cut_edges(
+            face_records=(outer_face,),
+            edge_records=(
+                *wall_edges,
+                *hole_edges,
+                opposite_depth_edge,
+                end_min,
+                end_max,
+                bogus,
+            ),
+            calculated_cut_edges=(end_min, end_max, bogus),
+            supplemental_cut_edges=(),
+            tolerance=0.01,
+        )
+
+        self.assertTrue(all(edge in highlight_edges for edge in hole_edges))
+        self.assertNotIn(bogus, highlight_edges)
 
     def test_thickness_face_candidate_requires_outer_touch(self) -> None:
         outer_face = FaceRecord(
@@ -2499,6 +2728,118 @@ END-ISO-10303-21;
         self.assertEqual(first.cut_component_id, near_duplicate_side.cut_component_id)
         self.assertNotEqual(first.cut_component_id, separate.cut_component_id)
 
+    def test_shell_open_boundary_fallback_skips_fragment_touching_existing_cut(self) -> None:
+        base_edge = EdgeRecord(
+            edge=object(),
+            length_mm=40.0,
+            bounds=Bounds(100.0, 50.0, 100.0, 114.0, 50.0, 109.0),
+            edge_type=CUT_FEATURE,
+            cut_component_id=1,
+        )
+        duplicate_fragment = EdgeRecord(
+            edge=object(),
+            length_mm=4.0,
+            bounds=Bounds(104.0, 46.0, 104.0, 104.0, 50.0, 104.0),
+            start_point=(104.0, 46.0, 104.0),
+            end_point=(104.0, 50.0, 104.0),
+            edge_type=UNCERTAIN,
+            faces=[
+                FaceRecord(
+                    object(),
+                    Bounds(100.0, 46.0, 100.0, 114.0, 50.0, 109.0),
+                    False,
+                )
+            ],
+        )
+
+        analysis = _analyze_shell_open_boundary_fallback(
+            (base_edge, duplicate_fragment),
+            base_cut_edges=(base_edge,),
+            base_pierce_count=1,
+            axis="X",
+            length_mm=1000.0,
+            tolerance=0.01,
+        )
+
+        self.assertEqual(analysis.cut_edges, ())
+        self.assertEqual(analysis.pierce_count, 0)
+        self.assertAlmostEqual(analysis.supplemental_cut_length_mm, 4.0)
+        self.assertEqual(analysis.supplemental_cut_edges, (duplicate_fragment,))
+        self.assertEqual(duplicate_fragment.edge_type, UNCERTAIN)
+
+    def test_shell_open_boundary_fallback_skips_inner_profile_span(self) -> None:
+        inner_profile_edge = EdgeRecord(
+            edge=object(),
+            length_mm=88.0,
+            bounds=Bounds(100.0, -44.0, 100.0, 100.0, 44.0, 100.0),
+            start_point=(100.0, -44.0, 100.0),
+            end_point=(100.0, 44.0, 100.0),
+            faces=[
+                FaceRecord(object(), Bounds(100.0, -44.0, 100.0, 104.0, 44.0, 104.0), False),
+                FaceRecord(object(), Bounds(96.0, -44.0, 96.0, 100.0, 44.0, 100.0), False),
+            ],
+        )
+
+        analysis = _analyze_shell_open_boundary_fallback(
+            (inner_profile_edge,),
+            base_cut_edges=(),
+            base_pierce_count=0,
+            axis="X",
+            length_mm=1885.0,
+            global_bounds=Bounds(0.0, -50.0, 0.0, 1885.0, 50.0, 1770.0),
+            tolerance=0.01,
+        )
+
+        self.assertEqual(analysis.cut_edges, ())
+        self.assertEqual(analysis.pierce_count, 0)
+        self.assertAlmostEqual(analysis.supplemental_cut_length_mm, 88.0)
+        self.assertAlmostEqual(analysis.missing_profile_span_length_mm, 0.0)
+        self.assertEqual(analysis.supplemental_cut_edges, (inner_profile_edge,))
+        self.assertEqual(analysis.reconstructed_cut_edges, ())
+
+    def test_shell_open_boundary_fallback_restores_one_missing_profile_span(self) -> None:
+        def inner_span(offset: float) -> EdgeRecord:
+            return EdgeRecord(
+                edge=object(),
+                length_mm=88.0,
+                bounds=Bounds(offset, -44.0, 100.0, offset, 44.0, 100.0),
+                start_point=(offset, -44.0, 100.0),
+                end_point=(offset, 44.0, 100.0),
+                faces=[
+                    FaceRecord(
+                        object(),
+                        Bounds(offset, -44.0, 100.0, offset + 4.0, 44.0, 104.0),
+                        False,
+                    ),
+                    FaceRecord(
+                        object(),
+                        Bounds(offset - 4.0, -44.0, 96.0, offset, 44.0, 100.0),
+                        False,
+                    ),
+                ],
+            )
+
+        analysis = _analyze_shell_open_boundary_fallback(
+            (inner_span(100.0), inner_span(300.0)),
+            base_cut_edges=(),
+            base_pierce_count=0,
+            axis="X",
+            length_mm=1885.0,
+            global_bounds=Bounds(0.0, -50.0, 0.0, 1885.0, 50.0, 1770.0),
+            tolerance=0.01,
+        )
+
+        self.assertEqual(analysis.cut_edges, ())
+        self.assertEqual(analysis.pierce_count, 0)
+        self.assertAlmostEqual(analysis.supplemental_cut_length_mm, 176.0)
+        self.assertAlmostEqual(analysis.missing_profile_span_length_mm, 100.0)
+        self.assertEqual(len(analysis.reconstructed_cut_edges), 1)
+        reconstructed = analysis.reconstructed_cut_edges[0]
+        self.assertAlmostEqual(reconstructed.length_mm, 100.0)
+        self.assertEqual(reconstructed.edge_type, "RECONSTRUCTED_CUT")
+        self.assertIsNotNone(reconstructed.start_point)
+        self.assertIsNotNone(reconstructed.end_point)
+
     def test_shell_open_boundary_fallback_accepts_stitched_two_face_edges(self) -> None:
         first_face = FaceRecord(
             face=object(),
@@ -2635,6 +2976,22 @@ END-ISO-10303-21;
         self.assertEqual(analysis.pierce_count, 4)
         self.assertEqual(len(analysis.cut_edges), 4)
         self.assertEqual(len(analysis.cut_faces), 4)
+
+    def test_shell_area_length_override_rejects_implausible_area_sum(self) -> None:
+        self.assertTrue(
+            _should_use_shell_area_length_override(
+                180.0,
+                selected_edge_length=120.0,
+                tolerance=0.1,
+            )
+        )
+        self.assertFalse(
+            _should_use_shell_area_length_override(
+                1000.0,
+                selected_edge_length=120.0,
+                tolerance=0.1,
+            )
+        )
 
     def test_complex_profile_contour_fallback_uses_dominant_and_opposite_end(self) -> None:
         dominant_a = EdgeRecord(

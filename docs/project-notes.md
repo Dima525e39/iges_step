@@ -32,6 +32,10 @@ Main capabilities:
   tube cut length.
 - Pierces are counted by connected cut contours, not by individual edges.
 - Each tube end is one pierce.
+- On slanted surface-only tubes, 3D highlighting uses the tube's local oriented
+  frame and shows physical outer cut contours. The numeric cut path can be a
+  wall/centerline estimate, so it is not reconstructed by summing displayed
+  outer perimeters.
 - If automatic wall thickness is uncertain, the user can enter thickness
   manually in the calculation table.
 - For customer-supplied tube, material/tube purchase cost is excluded from part
@@ -87,6 +91,23 @@ Reference results after the fix:
 | `ТА 001.006.ХХХ Укосина правая верхняя.IGS` | 4 | 4 |
 | `ТА 001.006.ХХХ Укосина правая нижняя.IGS` | 4 | 4 |
 | `ТА 001.006.ХХХ Центральная вставка.IGS` | 2 | 2 |
+
+## Pergola R4 Roof References
+
+The `100x100x4` slanted surface-only IGES files exposed two related issues:
+missing broad-face cut overlays and duplicate tiny shell fragments. The current
+logic keeps numeric calculation records separate from the physical outer
+contours used for 3D highlighting.
+
+Validated references:
+
+| File | Pierces | Cut length | Highlight validation |
+| --- | ---: | ---: | --- |
+| `С1_поз.5_100х100х4.IGS` | 39 | 2437.417 mm | all broad-face slots visible |
+| `С1_поз.3_100х100х4.IGS` | 49 | 2178.167 mm | broad-face slot row visible |
+
+Longitudinal tube edges remain excluded. For files where a reliable oriented
+frame cannot be inferred, the viewer falls back to the calculated edge set.
 
 ## Known Diagnostic Files
 
@@ -177,4 +198,3 @@ values, commands, and links.
   or continue improving surface fallback logic.
 - How far to develop DXF true-shape nesting before returning focus to tube
   calculation accuracy.
-

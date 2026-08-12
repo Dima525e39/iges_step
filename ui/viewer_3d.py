@@ -6,7 +6,7 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import QCheckBox, QGridLayout, QLabel, QVBoxLayout, QWidget
 
 from core.file_job import FileJob
-from cad.edge_classifier import CUT_END, CUT_FEATURE
+from cad.edge_classifier import CUT_END
 
 
 MIB = 1024 * 1024
@@ -116,7 +116,9 @@ class Viewer3D(QWidget):
         layers_layout.setHorizontalSpacing(8)
         layers_layout.setVerticalSpacing(2)
         self.cut_lines_layer = QCheckBox("Линии реза")
-        self.cut_lines_layer.setToolTip("Показать расчетные CUT_FEATURE и CUT_END: вырезы, пазы и торцы.")
+        self.cut_lines_layer.setToolTip(
+            "Показать наружные кромки всех найденных контуров реза."
+        )
         self.cut_lines_layer.setChecked(True)
         self.pierces_layer = QCheckBox("Врезки")
         self.pierces_layer.setToolTip("Показать зеленые точки начала расчетных контуров.")
@@ -188,12 +190,27 @@ class Viewer3D(QWidget):
             return
 
         cut_edges = tuple(getattr(classification, "calculated_cut_edges", ()) or ())
-        feature_edges = tuple(edge for edge in cut_edges if getattr(edge, "edge_type", "") == CUT_FEATURE)
-        end_edges = tuple(edge for edge in cut_edges if getattr(edge, "edge_type", "") == CUT_END)
+        supplemental_edges = tuple(
+            getattr(classification, "supplemental_cut_edges", ()) or ()
+        )
+        highlight_edges = tuple(
+            getattr(classification, "highlight_cut_edges", ()) or ()
+        )
+        reconstructed_edges = tuple(
+            getattr(classification, "reconstructed_cut_edges", ()) or ()
+        )
+        displayed_edges = highlight_edges or (*cut_edges, *supplemental_edges)
+        feature_edges = tuple(
+            edge for edge in displayed_edges if getattr(edge, "edge_type", "") != CUT_END
+        )
+        end_edges = tuple(
+            edge for edge in displayed_edges if getattr(edge, "edge_type", "") == CUT_END
+        )
 
         if self.cut_lines_layer.isChecked():
             self._display_edge_records(feature_edges, color="RED", width=5.0)
             self._display_edge_records(end_edges, color="ORANGE", width=5.0)
+            self._display_edge_records(reconstructed_edges, color="YELLOW", width=6.0)
         if self.pierces_layer.isChecked():
             self._display_pierce_markers(cut_edges)
 
@@ -201,17 +218,37 @@ class Viewer3D(QWidget):
         if self._display is None:
             return
         for record in records:
-            edge = getattr(record, "edge", None)
-            if edge is None:
+            shape = self._record_display_shape(record)
+            if shape is None:
                 continue
             try:
-                presentations = self._display.DisplayShape(edge, color=color, update=False) or []
+                presentations = self._display.DisplayShape(shape, color=color, update=False) or []
                 for presentation in presentations:
                     set_width = getattr(presentation, "SetWidth", None)
                     if set_width is not None:
                         set_width(width)
             except Exception:
                 continue
+
+    @staticmethod
+    def _record_display_shape(record: object) -> object | None:
+        edge = getattr(record, "edge", None)
+        if edge is not None:
+            return edge
+        start = getattr(record, "start_point", None)
+        end = getattr(record, "end_point", None)
+        if start is None or end is None:
+            return None
+        try:
+            from OCC.Core.BRepBuilderAPI import BRepBuilderAPI_MakeEdge
+            from OCC.Core.gp import gp_Pnt
+
+            return BRepBuilderAPI_MakeEdge(
+                gp_Pnt(float(start[0]), float(start[1]), float(start[2])),
+                gp_Pnt(float(end[0]), float(end[1]), float(end[2])),
+            ).Edge()
+        except Exception:
+            return None
 
     def _display_pierce_markers(self, records: tuple[object, ...]) -> None:
         if self._display is None:

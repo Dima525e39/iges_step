@@ -198,6 +198,23 @@ class Viewer2D(QWidget):
                     margin + (segment.start.y_mm + segment.end.y_mm) / 2.0 + 3.0,
                 )
 
+        for segment in preview.supplemental_cut_segments:
+            self._draw_segment(
+                segment,
+                margin=margin,
+                color=QColor("#dc2626"),
+                width=2.5,
+            )
+
+        for segment in preview.reconstructed_cut_segments:
+            self._draw_segment(
+                segment,
+                margin=margin,
+                color=QColor("#ca8a04"),
+                width=3.0,
+                dashed=True,
+            )
+
         if not preview.calculated_cut_segments:
             text = self.scene.addText("Нет отмеченных контуров")
             text.setDefaultTextColor(QColor("#64748b"))

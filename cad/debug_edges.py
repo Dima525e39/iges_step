@@ -5,7 +5,6 @@ from pathlib import Path
 
 from app_info import APP_VERSION, APP_BUILD_COMMIT, CALC_CORE_REVISION
 from cad.edge_classifier import (
-    CALCULATED_CUT_TYPES,
     CUT_END,
     Bounds,
     EdgeClassificationResult,
@@ -32,7 +31,7 @@ def write_debug_edges_csv(
         global_bounds=global_bounds,
         tolerance=tolerance,
     )
-    calculated_ids = {id(edge) for edge in classification.calculated_cut_edges}
+    calculated_ids = {id(edge) for edge in classification.visual_cut_edges}
 
     with target.open("w", newline="", encoding="utf-8-sig") as handle:
         writer = csv.writer(handle)
@@ -56,7 +55,7 @@ def write_debug_edges_csv(
             )
         )
         for index, edge in enumerate(classification.edge_records, start=1):
-            included = id(edge) in calculated_ids and edge.edge_type in CALCULATED_CUT_TYPES
+            included = id(edge) in calculated_ids
             writer.writerow(
                 (
                     source_file,
