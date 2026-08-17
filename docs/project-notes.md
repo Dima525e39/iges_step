@@ -133,6 +133,7 @@ Windows:
 - The packaged build must include `app_build.py` identity.
 - GitHub releases publish the Windows build as a direct EXE, a standard ZIP,
   and a compact 7z archive.
+- The standard ZIP contains only `TubeCutCalculator.exe`.
 
 macOS:
 
