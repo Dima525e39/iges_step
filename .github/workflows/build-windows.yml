@@ -55,12 +55,8 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force package | Out-Null
           New-Item -ItemType Directory -Force package\latest | Out-Null
-          Copy-Item dist\TubeCutCalculator.exe package\TubeCutCalculator-v0.5.5-windows.exe
           Compress-Archive -Path dist\TubeCutCalculator.exe -DestinationPath package\TubeCutCalculator-v0.5.5-windows.zip -CompressionLevel Optimal
-          & "C:\Program Files\7-Zip\7z.exe" a -t7z -mx=9 package\TubeCutCalculator-v0.5.5-windows.7z dist\TubeCutCalculator.exe dist\version.txt
-          Copy-Item package\TubeCutCalculator-v0.5.5-windows.exe package\latest\TubeCutCalculator-windows-latest.exe
           Copy-Item package\TubeCutCalculator-v0.5.5-windows.zip package\latest\TubeCutCalculator-windows-latest.zip
-          Copy-Item package\TubeCutCalculator-v0.5.5-windows.7z package\latest\TubeCutCalculator-windows-latest.7z
           Get-ChildItem -Recurse package
 
       - name: Upload artifact
@@ -68,19 +64,13 @@ jobs:
         with:
           name: TubeCutCalculator-windows-${{ github.run_number }}
           if-no-files-found: error
-          path: |
-            package/*.exe
-            package/*.zip
-            package/*.7z
+          path: package/*.zip
 
       - name: Attach to GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            package/*.exe
-            package/*.zip
-            package/*.7z
+          files: package/*.zip
 
       - name: Publish latest Windows build
         if: github.ref == 'refs/heads/main'
@@ -95,7 +85,4 @@ jobs:
             Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           prerelease: true
           make_latest: false
-          files: |
-            package/latest/TubeCutCalculator-windows-latest.exe
-            package/latest/TubeCutCalculator-windows-latest.zip
-            package/latest/TubeCutCalculator-windows-latest.7z
+          files: package/latest/TubeCutCalculator-windows-latest.zip

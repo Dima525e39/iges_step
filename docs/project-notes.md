@@ -142,9 +142,10 @@ Windows:
 - GitHub Actions workflow: `.github/workflows/build-windows.yml`.
 - Packaged EXE must pass `--self-test-imports`.
 - The packaged build must include `app_build.py` identity.
-- GitHub releases publish the Windows build as a direct EXE, a standard ZIP,
-  and a compact 7z archive.
+- GitHub releases publish only the standard Windows ZIP.
 - The standard ZIP contains only `TubeCutCalculator.exe`.
+- The GitHub Actions artifact also contains only that ZIP to avoid storing
+  duplicate copies of the same executable.
 
 macOS:
 
