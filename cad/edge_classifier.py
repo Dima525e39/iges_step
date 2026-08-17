@@ -297,6 +297,7 @@ def classify_cut_edges(
     length_mm = _summary_axis_size(summary, axis)
     global_bounds = _shape_bounds(shape)
     tolerance = _tolerance_from_summary(summary)
+    allow_shell_open_boundary_fallback = not _shape_has_solid(shape)
 
     face_records = _collect_face_records(
         shape,
@@ -378,14 +379,18 @@ def classify_cut_edges(
         has_outer_faces=outer_face_count > 0,
         tolerance=tolerance,
     )
-    shell_open_boundary_analysis = _analyze_shell_open_boundary_fallback(
-        edge_records,
-        base_cut_edges=cut_face_analysis.cut_edges,
-        base_pierce_count=cut_face_analysis.pierce_count,
-        axis=axis,
-        length_mm=length_mm,
-        global_bounds=global_bounds,
-        tolerance=tolerance,
+    shell_open_boundary_analysis = (
+        _analyze_shell_open_boundary_fallback(
+            edge_records,
+            base_cut_edges=cut_face_analysis.cut_edges,
+            base_pierce_count=cut_face_analysis.pierce_count,
+            axis=axis,
+            length_mm=length_mm,
+            global_bounds=global_bounds,
+            tolerance=tolerance,
+        )
+        if allow_shell_open_boundary_fallback
+        else ShellOpenBoundaryAnalysis()
     )
     use_round_loop_analysis = bool(round_loop_analysis.cut_edges)
     use_cut_face_analysis = bool(cut_face_analysis.cut_edges)
@@ -439,14 +444,18 @@ def classify_cut_edges(
             tolerance=tolerance,
         )
         cut_face_edge_component_count = len(set(cut_face_edge_component_ids.values()))
-        shell_open_boundary_analysis = _analyze_shell_open_boundary_fallback(
-            edge_records,
-            base_cut_edges=cut_face_analysis.cut_edges,
-            base_pierce_count=cut_face_analysis.pierce_count,
-            axis=axis,
-            length_mm=length_mm,
-            global_bounds=global_bounds,
-            tolerance=tolerance,
+        shell_open_boundary_analysis = (
+            _analyze_shell_open_boundary_fallback(
+                edge_records,
+                base_cut_edges=cut_face_analysis.cut_edges,
+                base_pierce_count=cut_face_analysis.pierce_count,
+                axis=axis,
+                length_mm=length_mm,
+                global_bounds=global_bounds,
+                tolerance=tolerance,
+            )
+            if allow_shell_open_boundary_fallback
+            else ShellOpenBoundaryAnalysis()
         )
         prefer_cut_edge_components = _prefer_cut_edge_components_for_cut_faces(
             cut_face_edge_component_count=cut_face_edge_component_count,
@@ -4715,6 +4724,16 @@ def _iter_shapes(shape: object, shape_type: int):
     while explorer.More():
         yield explorer.Current()
         explorer.Next()
+
+
+def _shape_has_solid(shape: object) -> bool:
+    try:
+        from OCC.Core.TopAbs import TopAbs_SOLID
+        from OCC.Core.TopExp import TopExp_Explorer
+
+        return bool(TopExp_Explorer(shape, TopAbs_SOLID).More())
+    except Exception:
+        return False
 
 
 def _shape_bounds(shape: object) -> Bounds:

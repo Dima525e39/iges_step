@@ -37,6 +37,7 @@ from cad.edge_classifier import (
     _is_thickness_face_candidate,
     _prefer_cut_edge_components_for_cut_faces,
     _round_bbox_should_use_compact_mixed_features,
+    _shape_has_solid,
     _should_use_shell_area_length_override,
     _tolerance_from_summary,
     WireRecord,
@@ -584,6 +585,28 @@ class CadImporterTests(unittest.TestCase):
             sys.modules["OCC.Core.TopExp"] = top_exp_module
 
             self.assertEqual(_count_topology(object(), 1), 2)
+        finally:
+            for name, original in originals.items():
+                if original is None:
+                    sys.modules.pop(name, None)
+                else:
+                    sys.modules[name] = original
+
+    def test_shape_has_solid_uses_occ_topology(self) -> None:
+        top_abs_module = types.ModuleType("OCC.Core.TopAbs")
+        top_abs_module.TopAbs_SOLID = 2
+        top_exp_module = types.ModuleType("OCC.Core.TopExp")
+        top_exp_module.TopExp_Explorer = FakeTopExpExplorer
+        module_names = ["OCC", "OCC.Core", "OCC.Core.TopAbs", "OCC.Core.TopExp"]
+        originals = {name: sys.modules.get(name) for name in module_names}
+
+        try:
+            sys.modules["OCC"] = types.ModuleType("OCC")
+            sys.modules["OCC.Core"] = types.ModuleType("OCC.Core")
+            sys.modules["OCC.Core.TopAbs"] = top_abs_module
+            sys.modules["OCC.Core.TopExp"] = top_exp_module
+
+            self.assertTrue(_shape_has_solid(object()))
         finally:
             for name, original in originals.items():
                 if original is None:

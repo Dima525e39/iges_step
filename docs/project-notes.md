@@ -45,6 +45,10 @@ Main capabilities:
 
 ## Geometry Core Notes
 
+- Shell open-boundary supplementation is only valid for shapes without a
+  solid. Solid STEP tubes must use their connected outer cut contours without
+  adding stitched or inner shell edges to the cut length.
+
 Primary modules:
 
 - `cad/analyzer.py`: top-level geometry analysis result and profile refinement.
@@ -91,6 +95,13 @@ Reference results after the fix:
 | `ТА 001.006.ХХХ Укосина правая верхняя.IGS` | 4 | 4 |
 | `ТА 001.006.ХХХ Укосина правая нижняя.IGS` | 4 | 4 |
 | `ТА 001.006.ХХХ Центральная вставка.IGS` | 2 | 2 |
+
+Solid STEP references after disabling shell supplementation for solid shapes:
+
+| File | Pierces | Cut length |
+| --- | ---: | ---: |
+| `Труба 20x20x1,5 L=1196,9-1.stp` | 2 | 181.388 mm |
+| `Труба 20x20x1,5 L=1183,5-1.stp` | 4 | 290.007 mm |
 
 ## Pergola R4 Roof References
 
