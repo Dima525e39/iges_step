@@ -55,8 +55,8 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force package | Out-Null
           New-Item -ItemType Directory -Force package\latest | Out-Null
-          Compress-Archive -Path dist\TubeCutCalculator.exe -DestinationPath package\TubeCutCalculator-v0.5.5-windows.zip -CompressionLevel Optimal
-          Copy-Item package\TubeCutCalculator-v0.5.5-windows.zip package\latest\TubeCutCalculator-windows-latest.zip
+          Compress-Archive -Path dist\TubeCutCalculator.exe -DestinationPath package\TubeCutCalculator-v0.6.0-windows.zip -CompressionLevel Optimal
+          Copy-Item package\TubeCutCalculator-v0.6.0-windows.zip package\latest\TubeCutCalculator-windows-latest.zip
           Get-ChildItem -Recurse package
 
       - name: Upload artifact

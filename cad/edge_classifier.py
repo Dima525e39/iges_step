@@ -180,6 +180,8 @@ class EdgeClassificationResult:
     tolerance: float = 0.01
     round_outer_diameter_mm: float = 0.0
     face_records: tuple[FaceRecord, ...] = ()
+    tube_frame: object | None = None
+    analysis_space: str = "global-axis"
 
     @property
     def cut_edge_count(self) -> int:
@@ -269,7 +271,7 @@ class EdgeClassifier:
         length_axis: str,
         manual_wall_thickness_mm: float | None = None,
     ) -> EdgeClassificationResult:
-        return classify_cut_edges(
+        return classify_cut_edges_in_local_frame(
             shape,
             summary=summary,
             length_axis=length_axis,
@@ -283,6 +285,7 @@ def classify_cut_edges(
     summary: ShapeSummary,
     length_axis: str,
     manual_wall_thickness_mm: float | None = None,
+    tube_frame: object | None = None,
 ) -> EdgeClassificationResult:
     if shape is None:
         return EdgeClassificationResult(
@@ -293,9 +296,20 @@ def classify_cut_edges(
         )
 
     warnings: list[str] = []
-    axis = length_axis if length_axis in AXIS_INDEX else "Z"
-    length_mm = _summary_axis_size(summary, axis)
-    global_bounds = _shape_bounds(shape)
+    axis = "X" if tube_frame is not None else length_axis if length_axis in AXIS_INDEX else "Z"
+    if tube_frame is not None:
+        length_mm = max(0.0, float(tube_frame.length_mm))
+        global_bounds = Bounds(
+            0.0,
+            0.0,
+            0.0,
+            length_mm,
+            max(0.0, float(tube_frame.width_mm)),
+            max(0.0, float(tube_frame.height_mm)),
+        )
+    else:
+        length_mm = _summary_axis_size(summary, axis)
+        global_bounds = _shape_bounds(shape)
     tolerance = _tolerance_from_summary(summary)
     allow_shell_open_boundary_fallback = not _shape_has_solid(shape)
 
@@ -306,6 +320,7 @@ def classify_cut_edges(
         global_bounds=global_bounds,
         tolerance=tolerance,
         warnings=warnings,
+        tube_frame=tube_frame,
     )
     edge_records = _collect_edge_records(
         face_records,
@@ -313,6 +328,7 @@ def classify_cut_edges(
         length_mm=length_mm,
         tolerance=tolerance,
         warnings=warnings,
+        tube_frame=tube_frame,
     )
     thickness_faces = _collect_thickness_face_records(
         face_records,
@@ -787,6 +803,194 @@ def classify_cut_edges(
     )
 
 
+def classify_cut_edges_in_local_frame(
+    shape: object | None,
+    *,
+    summary: ShapeSummary,
+    length_axis: str,
+    manual_wall_thickness_mm: float | None = None,
+) -> EdgeClassificationResult:
+    """Classify a tube in its own frame and restore records to model coordinates."""
+
+    if shape is None:
+        return classify_cut_edges(
+            shape,
+            summary=summary,
+            length_axis=length_axis,
+            manual_wall_thickness_mm=manual_wall_thickness_mm,
+        )
+
+    axis = length_axis if length_axis in AXIS_INDEX else "Z"
+    global_bounds = _shape_bounds(shape)
+    tolerance = _tolerance_from_summary(summary)
+    try:
+        from cad.kernel_v6 import infer_tube_frame_from_shape
+
+        frame = infer_tube_frame_from_shape(
+            shape,
+            length_axis=axis,
+            global_bounds=global_bounds,
+            tolerance=tolerance,
+        )
+    except Exception as exc:
+        result = classify_cut_edges(
+            shape,
+            summary=summary,
+            length_axis=axis,
+            manual_wall_thickness_mm=manual_wall_thickness_mm,
+        )
+        result.warnings = (
+            *result.warnings,
+            f"Локальная система трубы не построена; использована глобальная ось: {exc}",
+        )
+        return result
+
+    if getattr(frame, "method", "") != "oriented-edge-frame":
+        result = classify_cut_edges(
+            shape,
+            summary=summary,
+            length_axis=axis,
+            manual_wall_thickness_mm=manual_wall_thickness_mm,
+        )
+        result.tube_frame = frame
+        result.analysis_space = "global-axis-fallback"
+        return result
+
+    legacy_shell_result = None
+    if not _shape_has_solid(shape):
+        legacy_shell_result = classify_cut_edges(
+            shape,
+            summary=summary,
+            length_axis=axis,
+            manual_wall_thickness_mm=manual_wall_thickness_mm,
+        )
+
+    try:
+        result = classify_cut_edges(
+            shape,
+            summary=summary,
+            length_axis="X",
+            manual_wall_thickness_mm=manual_wall_thickness_mm,
+            tube_frame=frame,
+        )
+        _restore_classification_to_model_space(
+            result,
+            original_bounds=global_bounds,
+            original_axis=axis,
+        )
+        result.tube_frame = frame
+        result.analysis_space = "oriented-tube-frame"
+        result.warnings = (
+            *result.warnings,
+            "Классификация выполнена в локальной системе координат трубы.",
+        )
+        if (
+            legacy_shell_result is not None
+            and not _classification_results_are_equivalent(
+                result,
+                legacy_shell_result,
+            )
+        ):
+            legacy_shell_result.tube_frame = frame
+            legacy_shell_result.analysis_space = "oriented-frame-legacy-shell-guard"
+            legacy_shell_result.warnings = (
+                *legacy_shell_result.warnings,
+                "Локальная и проверенная shell-классификация разошлись; "
+                "числовой результат сохранен по проверенной ветке surface-only IGES, "
+                "локальная система используется для длины, сечения и развертки.",
+            )
+            return legacy_shell_result
+        return result
+    except Exception as exc:
+        result = legacy_shell_result or classify_cut_edges(
+            shape,
+            summary=summary,
+            length_axis=axis,
+            manual_wall_thickness_mm=manual_wall_thickness_mm,
+        )
+        result.tube_frame = frame
+        result.analysis_space = "global-axis-fallback"
+        result.warnings = (
+            *result.warnings,
+            f"Локальная классификация не выполнена; использована глобальная ось: {exc}",
+        )
+        return result
+
+
+def _classification_results_are_equivalent(
+    local_result: EdgeClassificationResult,
+    legacy_result: EdgeClassificationResult,
+) -> bool:
+    tolerance = max(
+        float(local_result.tolerance),
+        float(legacy_result.tolerance),
+        0.01,
+    )
+    if local_result.pierce_count != legacy_result.pierce_count:
+        return False
+    if abs(local_result.cut_length_mm - legacy_result.cut_length_mm) > tolerance * 2.0:
+        return False
+    local_thickness = max(0.0, float(local_result.wall_thickness_mm))
+    legacy_thickness = max(0.0, float(legacy_result.wall_thickness_mm))
+    return (
+        local_thickness <= tolerance
+        or legacy_thickness <= tolerance
+        or abs(local_thickness - legacy_thickness) <= max(tolerance, 0.05)
+    )
+
+
+def _restore_classification_to_model_space(
+    classification: EdgeClassificationResult,
+    *,
+    original_bounds: Bounds,
+    original_axis: str,
+) -> None:
+    face_records = tuple(classification.face_records)
+    for face in face_records:
+        try:
+            face.bounds = _shape_bounds(face.face)
+        except Exception:
+            pass
+
+    for edge in _all_classification_edge_records(classification):
+        if edge.edge is not None:
+            try:
+                edge.bounds = _shape_bounds(edge.edge)
+            except Exception:
+                pass
+        edge.start_point = _vertex_point(edge.start_vertex)
+        edge.end_point = _vertex_point(edge.end_vertex)
+
+    classification.global_bounds = original_bounds
+    classification.length_axis = original_axis
+
+
+def _all_classification_edge_records(
+    classification: EdgeClassificationResult,
+) -> tuple[EdgeRecord, ...]:
+    records: list[EdgeRecord] = []
+    seen: set[int] = set()
+    groups = (
+        classification.edge_records,
+        classification.cut_edges,
+        classification.calculated_cut_edges,
+        classification.supplemental_cut_edges,
+        classification.reconstructed_cut_edges,
+        classification.highlight_cut_edges,
+        classification.auxiliary_unfold_edges,
+        classification.ignored_longitudinal_edges,
+        classification.ignored_profile_edges,
+        classification.ignored_plane_radius_edges,
+        classification.uncertain_edges,
+    )
+    for edge in (item for group in groups for item in group):
+        if id(edge) in seen:
+            continue
+        seen.add(id(edge))
+        records.append(edge)
+    return tuple(records)
+
+
 def _collect_face_records(
     shape: object,
     *,
@@ -795,13 +999,18 @@ def _collect_face_records(
     global_bounds: Bounds,
     tolerance: float,
     warnings: list[str],
+    tube_frame: object | None = None,
 ) -> list[FaceRecord]:
     from OCC.Core.TopAbs import TopAbs_FACE
 
     records: list[FaceRecord] = []
     for face in _iter_shapes(shape, TopAbs_FACE):
         try:
-            bounds = _shape_bounds(face)
+            bounds = (
+                _shape_local_bounds(face, tube_frame, tolerance=tolerance)
+                if tube_frame is not None
+                else _shape_bounds(face)
+            )
         except Exception as exc:
             warnings.append(f"Не удалось получить bbox грани: {exc}")
             continue
@@ -828,13 +1037,19 @@ def _collect_edge_records(
     length_mm: float,
     tolerance: float,
     warnings: list[str],
+    tube_frame: object | None = None,
 ) -> list[EdgeRecord]:
     from OCC.Core.TopAbs import TopAbs_EDGE
 
     records: list[EdgeRecord] = []
     edge_index: dict[int, list[EdgeRecord]] = {}
     for face_record in face_records:
-        wire_records = _collect_wire_records(face_record, warnings=warnings)
+        wire_records = _collect_wire_records(
+            face_record,
+            warnings=warnings,
+            tube_frame=tube_frame,
+            tolerance=tolerance,
+        )
         if wire_records:
             outer_wire = _choose_outer_wire(wire_records)
             for wire_record in wire_records:
@@ -845,6 +1060,8 @@ def _collect_edge_records(
                         edge,
                         warnings,
                         edge_index=edge_index,
+                        tube_frame=tube_frame,
+                        tolerance=tolerance,
                     )
                     _append_unique_face(record, face_record)
                     if not wire_record.is_outer_wire:
@@ -865,6 +1082,8 @@ def _collect_edge_records(
                 edge,
                 warnings,
                 edge_index=edge_index,
+                tube_frame=tube_frame,
+                tolerance=tolerance,
             )
             _append_unique_face(record, face_record)
     return records
@@ -4374,6 +4593,8 @@ def _collect_wire_records(
     face_record: FaceRecord,
     *,
     warnings: list[str],
+    tube_frame: object | None = None,
+    tolerance: float = 0.01,
 ) -> list[WireRecord]:
     try:
         from OCC.Core.TopAbs import TopAbs_EDGE, TopAbs_WIRE
@@ -4397,7 +4618,11 @@ def _collect_wire_records(
                     face=face_record,
                     edges=tuple(edges),
                     length_mm=length_mm,
-                    bounds=_safe_bounds(wire),
+                    bounds=(
+                        _shape_local_bounds(wire, tube_frame, tolerance=tolerance)
+                        if tube_frame is not None
+                        else _safe_bounds(wire)
+                    ),
                 )
             )
     return records
@@ -4413,6 +4638,8 @@ def _get_or_create_edge_record(
     warnings: list[str],
     *,
     edge_index: dict[int, list[EdgeRecord]] | None = None,
+    tube_frame: object | None = None,
+    tolerance: float = 0.01,
 ) -> EdgeRecord:
     edge_key = hash(edge)
     candidates = edge_index.get(edge_key, []) if edge_index is not None else records
@@ -4423,11 +4650,20 @@ def _get_or_create_edge_record(
     record = EdgeRecord(
         edge=edge,
         length_mm=_edge_length(edge, warnings),
-        bounds=_safe_bounds(edge),
+        bounds=(
+            _shape_local_bounds(edge, tube_frame, tolerance=tolerance)
+            if tube_frame is not None
+            else _safe_bounds(edge)
+        ),
     )
     record.start_vertex, record.end_vertex = _edge_vertices(edge)
     record.start_point = _vertex_point(record.start_vertex)
     record.end_point = _vertex_point(record.end_vertex)
+    if tube_frame is not None:
+        if record.start_point is not None:
+            record.start_point = tube_frame.local_coordinates(record.start_point)
+        if record.end_point is not None:
+            record.end_point = tube_frame.local_coordinates(record.end_point)
     records.append(record)
     if edge_index is not None:
         edge_index.setdefault(edge_key, []).append(record)
@@ -4734,6 +4970,76 @@ def _shape_has_solid(shape: object) -> bool:
         return bool(TopExp_Explorer(shape, TopAbs_SOLID).More())
     except Exception:
         return False
+
+
+def _shape_local_bounds(
+    shape: object,
+    tube_frame: object,
+    *,
+    tolerance: float,
+) -> Bounds:
+    """Bound trimmed topology by sampled curve points in the tube frame.
+
+    BRep bounding boxes may include the untrimmed support surface after a
+    rotation (notably for IGES BSplines).  Sampling the actual boundary curves
+    keeps the classifier tied to the visible part geometry.
+    """
+
+    from OCC.Core.TopAbs import TopAbs_EDGE
+
+    try:
+        is_edge = int(shape.ShapeType()) == int(TopAbs_EDGE)
+    except Exception:
+        is_edge = False
+    edges = (shape,) if is_edge else tuple(_iter_shapes(shape, TopAbs_EDGE))
+    points = tuple(
+        tube_frame.local_coordinates(point)
+        for edge in edges
+        for point in _sample_edge_points(edge, tolerance=tolerance)
+    )
+    if not points:
+        raise ValueError("не найдены точки граничных ребер")
+    return Bounds(
+        min(point[0] for point in points),
+        min(point[1] for point in points),
+        min(point[2] for point in points),
+        max(point[0] for point in points),
+        max(point[1] for point in points),
+        max(point[2] for point in points),
+    )
+
+
+def _sample_edge_points(
+    edge: object,
+    *,
+    tolerance: float,
+) -> tuple[tuple[float, float, float], ...]:
+    points: list[tuple[float, float, float]] = []
+    for vertex in _edge_vertices(edge):
+        point = _vertex_point(vertex)
+        if point is not None:
+            points.append(point)
+
+    try:
+        from OCC.Core.BRepAdaptor import BRepAdaptor_Curve
+
+        adaptor = BRepAdaptor_Curve(edge)
+        first = float(adaptor.FirstParameter())
+        last = float(adaptor.LastParameter())
+        if math.isfinite(first) and math.isfinite(last) and last > first:
+            for index in range(33):
+                point = adaptor.Value(first + (last - first) * index / 32.0)
+                points.append((float(point.X()), float(point.Y()), float(point.Z())))
+    except Exception:
+        pass
+
+    unique: list[tuple[float, float, float]] = []
+    point_tolerance = max(float(tolerance) * 0.01, 1e-8)
+    for point in points:
+        if any(_points_are_close(point, existing, tolerance=point_tolerance) for existing in unique):
+            continue
+        unique.append(point)
+    return tuple(unique)
 
 
 def _shape_bounds(shape: object) -> Bounds:

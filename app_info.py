@@ -5,10 +5,10 @@ import sys
 from pathlib import Path
 
 APP_NAME = "TubeCutCalculator"
-APP_VERSION = "v0.5.5"
+APP_VERSION = "v0.6.0"
 APP_DESCRIPTION = (
     "Калькулятор лазерной резки труб и листовых деталей: STEP/IGES/DXF, "
-    "расчет реза, nesting, цены, закупка, Excel/PDF и печать."
+    "расчет реза, цены, закупка, Excel/PDF и печать."
 )
 
 

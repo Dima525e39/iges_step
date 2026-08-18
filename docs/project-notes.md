@@ -7,7 +7,7 @@ entire chat history.
 ## Current Product
 
 TubeCutCalculator is a desktop application for estimating tube laser cutting and
-DXF sheet work. The current documented version is `v0.5.5`.
+DXF sheet work. The current documented version is `v0.6.0`.
 
 Main capabilities:
 
@@ -20,6 +20,9 @@ Main capabilities:
 - Save and open project JSON.
 - Write `debug_edges.csv` and `debug_faces.csv` for geometry diagnostics.
 - Build a Windows EXE locally and through GitHub Actions.
+
+Version `v0.6.0` adds the clean-room `tube-kernel-v6` data model and removes
+the sheet nesting feature. Single-part DXF analysis and DXF/SVG export remain.
 
 ## Important Decisions
 
@@ -42,6 +45,9 @@ Main capabilities:
   price.
 - Local macOS packaging files are development-only unless the user asks to
   publish them.
+- Proprietary TubesT DLL/BPL modules are not linked or redistributed. The v6
+  core is an independent implementation based on the application's own
+  OpenCascade analysis results.
 
 ## Geometry Core Notes
 
@@ -54,11 +60,17 @@ Primary modules:
 - `cad/analyzer.py`: top-level geometry analysis result and profile refinement.
 - `cad/edge_classifier.py`: B-Rep/surface edge classification and fallback
   contour grouping.
+- `cad/kernel_v6.py`: stable tube frame, cross-section, surface, 3D contour,
+  diagnostic unfold, and contour-order data contracts.
 - `cad/importer.py`: STEP/IGES import, including surface-only IGES handling.
 - `cad/debug_edges.py`: writes per-edge diagnostics.
 - `cad/debug_faces.py`: writes per-face diagnostics.
 - `ui/viewer_3d.py`: 3D display and calculated cut overlay.
 - `ui/main_window.py`: file queue, table, analysis actions, export actions.
+
+The v6 kernel consumes only confirmed `CUT_END` and `CUT_FEATURE` records.
+Its diagnostic unfold and toolpath order do not replace the authoritative 3D
+cut length and do not add the unfold boundary to the calculation.
 
 Rules that have repeatedly mattered:
 
@@ -211,5 +223,3 @@ values, commands, and links.
   Windows machines with Inventor installed.
 - Whether to convert more surface-only IGES cases into solids before analysis,
   or continue improving surface fallback logic.
-- How far to develop DXF true-shape nesting before returning focus to tube
-  calculation accuracy.

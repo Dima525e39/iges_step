@@ -17,6 +17,7 @@ CALCULATION_MODULES = (
     "cad.inventor_converter",
     "cad.importer",
     "cad.edge_classifier",
+    "cad.kernel_v6",
     "cad.pierce_counter",
     "cad.cut_length_calculator",
     "cad.analyzer",

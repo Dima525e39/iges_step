@@ -20,7 +20,10 @@ from PySide6.QtWidgets import (
 from cad.analyzer import GeometryAnalysisResult, analyze_shape
 from cad.cut_length_calculator import CutLengthCalculator
 from cad.debug_edges import write_debug_edges_csv
-from cad.edge_classifier import EdgeClassifier, classify_cut_edges
+from cad.edge_classifier import (
+    EdgeClassifier,
+    classify_cut_edges_in_local_frame as classify_cut_edges,
+)
 from cad.pierce_counter import PierceCounter, count_edge_components
 
 if TYPE_CHECKING:

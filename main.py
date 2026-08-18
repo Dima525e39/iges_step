@@ -116,6 +116,7 @@ def _run_import_self_test(output_path: Path | None) -> int:
 
         from cad.analyzer import analyze_shape
         from cad.dxf_reader import read_dxf_sheet
+        from cad.kernel_v6 import infer_tube_frame
         from cad.profile_detector import detect_profile_from_dimensions
         from cad.sheet_analyzer import build_sheet_analysis_from_contours
         from cad.shape_summary import _count_topology
@@ -123,8 +124,7 @@ def _run_import_self_test(output_path: Path | None) -> int:
         from export.excel_exporter import export_excel_workbook
         from export.pdf_commercial_offer import export_commercial_offer_pdf
         from export.pdf_technical_report import export_technical_report_pdf
-        from export.vector_exporter import export_nesting_dxf, export_sheet_svg
-        from nesting.core import MaxRectsNestingEngine
+        from export.vector_exporter import export_sheet_dxf, export_sheet_svg
         from pricing.price_selector import calculate_job_price
         from purchase.tube_purchase_calculator import calculate_tube_purchase
 
@@ -220,6 +220,16 @@ def _run_import_self_test(output_path: Path | None) -> int:
             raise RuntimeError("round mixed-inner fallback self-test failed")
         record("round IGES fallback helpers: OK")
 
+        kernel_frame = infer_tube_frame(
+            (),
+            length_axis="Z",
+            global_bounds=Bounds(0.0, 0.0, 0.0, 20.0, 20.0, 1000.0),
+            tolerance=0.01,
+        )
+        if kernel_frame.method != "global-z-axis-fallback" or kernel_frame.length_mm != 1000.0:
+            raise RuntimeError("tube kernel v6 frame self-test failed")
+        record("tube kernel v6 frame helper: OK")
+
         detect_profile_from_dimensions(100.0, 20.0, 10.0)
         record("profile detector helper: OK")
 
@@ -229,8 +239,7 @@ def _run_import_self_test(output_path: Path | None) -> int:
         _ = (
             read_dxf_sheet,
             build_sheet_analysis_from_contours,
-            MaxRectsNestingEngine,
-            export_nesting_dxf,
+            export_sheet_dxf,
             export_sheet_svg,
             export_excel_workbook,
             export_commercial_offer_pdf,
@@ -238,7 +247,7 @@ def _run_import_self_test(output_path: Path | None) -> int:
             calculate_job_price,
             calculate_tube_purchase,
         )
-        record("DXF/nesting/pricing/export/purchase helpers: OK")
+        record("DXF/pricing/export/purchase helpers: OK")
     except Exception as exc:
         exit_code = 1
         record(f"FAILED: {exc.__class__.__name__}: {exc}")

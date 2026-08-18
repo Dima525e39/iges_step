@@ -3,8 +3,7 @@ from __future__ import annotations
 from html import escape
 from pathlib import Path
 
-from cad.sheet_analyzer import SheetAnalysisResult, SheetContour, SheetPoint
-from nesting.core import NestingLayout, transformed_contours
+from cad.sheet_analyzer import SheetAnalysisResult, SheetContour
 
 
 def export_sheet_svg(
@@ -24,60 +23,6 @@ def export_sheet_svg(
 
 def export_sheet_dxf(analysis: SheetAnalysisResult, target_path: str | Path) -> Path:
     return _write_dxf(target_path, contours=analysis.contours)
-
-
-def export_nesting_svg(
-    layout: NestingLayout,
-    target_path: str | Path,
-    *,
-    title: str = "Nesting layout",
-) -> Path:
-    sheet_gap = max(25.0, layout.spacing_mm * 4.0)
-    contours: list[SheetContour] = []
-    for sheet in layout.sheets:
-        offset_y = sheet.index * (layout.sheet_height_mm + sheet_gap)
-        contours.extend(
-            _rectangle_contour(
-                0.0,
-                offset_y,
-                layout.sheet_width_mm,
-                layout.sheet_height_mm,
-                component_id=-(sheet.index + 1),
-            )
-        )
-        for placement in sheet.placements:
-            for contour in transformed_contours(placement):
-                contours.append(_offset_contour(contour, dx=0.0, dy=offset_y))
-    total_height = max(1.0, len(layout.sheets) * layout.sheet_height_mm + max(0, len(layout.sheets) - 1) * sheet_gap)
-    return _write_svg(
-        target_path,
-        width_mm=max(layout.sheet_width_mm, 1.0),
-        height_mm=total_height,
-        contours=tuple(contours),
-        title=title,
-    )
-
-
-def export_nesting_dxf(layout: NestingLayout, target_path: str | Path) -> Path:
-    sheet_gap = max(25.0, layout.spacing_mm * 4.0)
-    contours: list[SheetContour] = []
-    for sheet in layout.sheets:
-        offset_y = sheet.index * (layout.sheet_height_mm + sheet_gap)
-        contours.extend(
-            _rectangle_contour(
-                0.0,
-                offset_y,
-                layout.sheet_width_mm,
-                layout.sheet_height_mm,
-                component_id=-(sheet.index + 1),
-            )
-        )
-        for placement in sheet.placements:
-            contours.extend(
-                _offset_contour(contour, dx=0.0, dy=offset_y)
-                for contour in transformed_contours(placement)
-            )
-    return _write_dxf(target_path, contours=tuple(contours))
 
 
 def _write_svg(
@@ -110,7 +55,6 @@ def _write_svg(
     lines.extend(["</g>", "</svg>"])
     path.write_text("\n".join(lines), encoding="utf-8")
     return path
-
 
 def _write_dxf(
     target_path: str | Path,
@@ -198,48 +142,3 @@ def _write_dxf(
     chunks.extend(["0", "ENDSEC", "0", "EOF"])
     path.write_text("\n".join(chunks) + "\n", encoding="utf-8")
     return path
-
-
-def _rectangle_contour(
-    x: float,
-    y: float,
-    width: float,
-    height: float,
-    *,
-    component_id: int,
-) -> tuple[SheetContour, ...]:
-    points = (
-        SheetPoint(x, y),
-        SheetPoint(x + width, y),
-        SheetPoint(x + width, y + height),
-        SheetPoint(x, y + height),
-        SheetPoint(x, y),
-    )
-    return (
-        SheetContour(
-            points=points,
-            length_mm=2.0 * (width + height),
-            component_id=component_id,
-            is_outer=True,
-        ),
-    )
-
-
-def _offset_contour(contour: SheetContour, *, dx: float, dy: float) -> SheetContour:
-    return SheetContour(
-        points=tuple(
-            SheetPoint(point.x_mm + dx, point.y_mm + dy) for point in contour.points
-        ),
-        length_mm=contour.length_mm,
-        component_id=contour.component_id,
-        is_outer=contour.is_outer,
-    )
-
-
-def _is_closed(points: tuple[SheetPoint, ...]) -> bool:
-    if len(points) < 3:
-        return False
-    return (
-        abs(points[0].x_mm - points[-1].x_mm) <= 0.001
-        and abs(points[0].y_mm - points[-1].y_mm) <= 0.001
-    )

@@ -2358,15 +2358,15 @@ END-ISO-10303-21;
             content,
         )
         self.assertIn(
-            "part.step,v0.5.5,local,round-iges-fallback-v2,1,30.000000,CUT_FEATURE,yes",
+            "part.step,v0.6.0,local,tube-kernel-v6,1,30.000000,CUT_FEATURE,yes",
             content,
         )
         self.assertIn(
-            "part.step,v0.5.5,local,round-iges-fallback-v2,2,12.000000,SUPPLEMENTAL_CUT,yes",
+            "part.step,v0.6.0,local,tube-kernel-v6,2,12.000000,SUPPLEMENTAL_CUT,yes",
             content,
         )
         self.assertIn(
-            "part.step,v0.5.5,local,round-iges-fallback-v2,3,1000.000000,IGNORED_LONGITUDINAL,no",
+            "part.step,v0.6.0,local,tube-kernel-v6,3,1000.000000,IGNORED_LONGITUDINAL,no",
             content,
         )
 

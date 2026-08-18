@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from cad.edge_classifier import AUXILIARY_UNFOLD, CUT_END, CUT_FEATURE, AXIS_INDEX, Bounds
+from cad.kernel_v6 import TubeFrame, infer_tube_frame
 from cad.shape_summary import ShapeSummary
 
 
@@ -38,6 +39,7 @@ class UnfoldingPreview:
     ignored_profile_segments: tuple[UnfoldedSegment, ...] = ()
     ignored_plane_radius_segments: tuple[UnfoldedSegment, ...] = ()
     uncertain_segments: tuple[UnfoldedSegment, ...] = ()
+    frame_method: str = ""
     warnings: tuple[str, ...] = ()
 
 
@@ -80,12 +82,20 @@ def build_unfolding_preview(
 
     axis = length_axis if length_axis in AXIS_INDEX else "Z"
     global_bounds = edge_classifier._shape_bounds(shape)
-    classification = edge_classifier.classify_cut_edges(
+    classification = edge_classifier.classify_cut_edges_in_local_frame(
         shape,
         summary=summary,
         length_axis=axis,
     )
     tolerance = edge_classifier._tolerance_from_summary(summary)
+    tube_frame = getattr(classification, "tube_frame", None)
+    if tube_frame is None:
+        tube_frame = infer_tube_frame(
+            classification.edge_records,
+            length_axis=axis,
+            global_bounds=global_bounds,
+            tolerance=tolerance,
+        )
     return build_unfolding_preview_from_edges(
         classification.calculated_cut_edges,
         axis=axis,
@@ -94,6 +104,8 @@ def build_unfolding_preview(
         diagnostic_edge_length_mm=classification.diagnostic_edge_length_mm,
         pierce_count=classification.pierce_count or 0,
         tolerance=tolerance,
+        tube_frame=tube_frame,
+        round_profile=classification.round_outer_diameter_mm > 0.0,
         supplemental_cut_edges=classification.supplemental_cut_edges,
         reconstructed_cut_edges=classification.reconstructed_cut_edges,
         ignored_longitudinal_edges=classification.ignored_longitudinal_edges,
@@ -120,15 +132,25 @@ def build_unfolding_preview_from_edges(
     ignored_plane_radius_edges: tuple[object, ...] | list[object] = (),
     uncertain_edges: tuple[object, ...] | list[object] = (),
     warnings: tuple[str, ...] = (),
+    tube_frame: TubeFrame | None = None,
+    round_profile: bool = False,
 ) -> UnfoldingPreview:
     axis = axis if axis in AXIS_INDEX else "Z"
-    length_mm = _axis_size(global_bounds, axis)
-    perimeter_mm = _approx_profile_perimeter(global_bounds, axis)
+    length_mm = tube_frame.length_mm if tube_frame is not None else _axis_size(global_bounds, axis)
+    if tube_frame is not None:
+        perimeter_mm = (
+            3.141592653589793 * ((tube_frame.width_mm + tube_frame.height_mm) / 2.0)
+            if round_profile
+            else 2.0 * (tube_frame.width_mm + tube_frame.height_mm)
+        )
+    else:
+        perimeter_mm = _approx_profile_perimeter(global_bounds, axis)
     component_ids = _component_ids(
         edges,
         axis=axis,
         global_bounds=global_bounds,
         tolerance=tolerance,
+        tube_frame=tube_frame,
     )
     calculated_cut_segments = _segments_from_edges(
         edges,
@@ -136,18 +158,24 @@ def build_unfolding_preview_from_edges(
         global_bounds=global_bounds,
         component_ids=component_ids,
         default_edge_type=CUT_FEATURE,
+        tube_frame=tube_frame,
+        round_profile=round_profile,
     )
     supplemental_cut_segments = _segments_from_edges(
         supplemental_cut_edges,
         axis=axis,
         global_bounds=global_bounds,
         default_edge_type=CUT_FEATURE,
+        tube_frame=tube_frame,
+        round_profile=round_profile,
     )
     reconstructed_cut_segments = _segments_from_edges(
         reconstructed_cut_edges,
         axis=axis,
         global_bounds=global_bounds,
         default_edge_type="RECONSTRUCTED_CUT",
+        tube_frame=tube_frame,
+        round_profile=round_profile,
     )
     auxiliary_unfold_segments = _auxiliary_unfold_segments(
         length_mm=length_mm,
@@ -158,24 +186,32 @@ def build_unfolding_preview_from_edges(
         axis=axis,
         global_bounds=global_bounds,
         default_edge_type="IGNORED_LONGITUDINAL",
+        tube_frame=tube_frame,
+        round_profile=round_profile,
     )
     ignored_profile_segments = _segments_from_edges(
         ignored_profile_edges,
         axis=axis,
         global_bounds=global_bounds,
         default_edge_type="IGNORED_PROFILE",
+        tube_frame=tube_frame,
+        round_profile=round_profile,
     )
     ignored_plane_radius_segments = _segments_from_edges(
         ignored_plane_radius_edges,
         axis=axis,
         global_bounds=global_bounds,
         default_edge_type="IGNORED_PLANE_RADIUS",
+        tube_frame=tube_frame,
+        round_profile=round_profile,
     )
     uncertain_segments = _segments_from_edges(
         uncertain_edges,
         axis=axis,
         global_bounds=global_bounds,
         default_edge_type="UNCERTAIN",
+        tube_frame=tube_frame,
+        round_profile=round_profile,
     )
 
     return UnfoldingPreview(
@@ -193,6 +229,7 @@ def build_unfolding_preview_from_edges(
         ignored_profile_segments=ignored_profile_segments,
         ignored_plane_radius_segments=ignored_plane_radius_segments,
         uncertain_segments=uncertain_segments,
+        frame_method=tube_frame.method if tube_frame is not None else f"global-{axis.lower()}-axis",
         warnings=warnings,
     )
 
@@ -204,6 +241,8 @@ def _segments_from_edges(
     global_bounds: Bounds,
     component_ids: dict[int, int] | None = None,
     default_edge_type: str,
+    tube_frame: TubeFrame | None = None,
+    round_profile: bool = False,
 ) -> tuple[UnfoldedSegment, ...]:
     segments: list[UnfoldedSegment] = []
     for index, edge in enumerate(edges):
@@ -214,8 +253,20 @@ def _segments_from_edges(
         edge_type = str(getattr(edge, "edge_type", "") or default_edge_type)
         segments.append(
             UnfoldedSegment(
-                start=_project_point(start, axis=axis, global_bounds=global_bounds),
-                end=_project_point(end, axis=axis, global_bounds=global_bounds),
+                start=_project_point(
+                    start,
+                    axis=axis,
+                    global_bounds=global_bounds,
+                    tube_frame=tube_frame,
+                    round_profile=round_profile,
+                ),
+                end=_project_point(
+                    end,
+                    axis=axis,
+                    global_bounds=global_bounds,
+                    tube_frame=tube_frame,
+                    round_profile=round_profile,
+                ),
                 length_mm=float(getattr(edge, "length_mm", 0.0) or 0.0),
                 reason=str(getattr(edge, "reason", "") or edge_type),
                 component_id=(component_ids or {}).get(index, -1),
@@ -257,6 +308,7 @@ def _component_ids(
     axis: str,
     global_bounds: Bounds,
     tolerance: float,
+    tube_frame: TubeFrame | None = None,
 ) -> dict[int, int]:
     if not edges:
         return {}
@@ -292,6 +344,7 @@ def _component_ids(
                 axis=axis,
                 global_bounds=global_bounds,
                 tolerance=tolerance,
+                tube_frame=tube_frame,
             ) or _edges_touch(left, right, tolerance=tolerance):
                 union(left_index, right_index)
 
@@ -312,17 +365,25 @@ def _same_tube_end_side(
     axis: str,
     global_bounds: Bounds,
     tolerance: float,
+    tube_frame: TubeFrame | None = None,
 ) -> bool:
     if getattr(first, "edge_type", "") != CUT_END:
         return False
     if getattr(second, "edge_type", "") != CUT_END:
         return False
-    first_side = _edge_end_side(first, axis=axis, global_bounds=global_bounds, tolerance=tolerance)
+    first_side = _edge_end_side(
+        first,
+        axis=axis,
+        global_bounds=global_bounds,
+        tolerance=tolerance,
+        tube_frame=tube_frame,
+    )
     return first_side is not None and first_side == _edge_end_side(
         second,
         axis=axis,
         global_bounds=global_bounds,
         tolerance=tolerance,
+        tube_frame=tube_frame,
     )
 
 
@@ -387,7 +448,12 @@ def _project_point(
     *,
     axis: str,
     global_bounds: Bounds,
+    tube_frame: TubeFrame | None = None,
+    round_profile: bool = False,
 ) -> UnfoldedPoint:
+    if tube_frame is not None:
+        x_mm, y_mm = tube_frame.unfold_point(point, round_profile=round_profile)
+        return UnfoldedPoint(x_mm=x_mm, y_mm=y_mm)
     axis_index = AXIS_INDEX[axis]
     length = point[axis_index] - global_bounds.mins[axis_index]
     return UnfoldedPoint(
@@ -439,7 +505,21 @@ def _edge_end_side(
     axis: str,
     global_bounds: Bounds,
     tolerance: float,
+    tube_frame: TubeFrame | None = None,
 ) -> str | None:
+    if tube_frame is not None:
+        points = tuple(
+            point
+            for point in (getattr(edge, "start_point", None), getattr(edge, "end_point", None))
+            if point is not None
+        )
+        if points:
+            axial = tuple(tube_frame.local_coordinates(point)[0] for point in points)
+            end_tolerance = max(tolerance * 4.0, 0.05)
+            if max(abs(value) for value in axial) <= end_tolerance:
+                return "min"
+            if max(abs(value - tube_frame.length_mm) for value in axial) <= end_tolerance:
+                return "max"
     bounds = getattr(edge, "bounds", None)
     if bounds is None:
         return None

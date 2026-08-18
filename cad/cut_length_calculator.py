@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from cad.edge_classifier import EdgeClassificationResult, classify_cut_edges
+from cad.edge_classifier import (
+    EdgeClassificationResult,
+    classify_cut_edges_in_local_frame as classify_cut_edges,
+)
 from cad.shape_summary import ShapeSummary
 
 

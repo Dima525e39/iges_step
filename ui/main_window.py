@@ -73,7 +73,6 @@ from ui.invoice_export_dialog import InvoiceExportDialog
 from ui.logo_dialog import LogoDialog
 from ui.material_selection_dialog import MaterialSelectionDialog
 from ui.materials_dialog import MaterialsDialog
-from ui.nesting_dialog import NestingDialog
 from ui.pricing_dialog import PricingDialog
 from ui.settings_dialog import GeneralSettingsDialog
 from ui.stock_purchase_widget import StockPurchaseWidget
@@ -388,13 +387,11 @@ class MainWindow(QMainWindow):
         self.export_pdf_button = QPushButton("PDF счет")
         self.export_dxf_button = QPushButton("DXF")
         self.export_svg_button = QPushButton("SVG")
-        self.nesting_button = QPushButton("Nesting")
         self.save_project_button = QPushButton("Сохранить проект")
 
         actions.addWidget(self.process_selected_button)
         actions.addWidget(self.process_all_button)
         actions.addStretch(1)
-        self.nesting_button.setVisible(False)
         self.export_dxf_button.setVisible(False)
         self.export_svg_button.setVisible(False)
         self.export_csv_button.setVisible(False)
@@ -421,7 +418,6 @@ class MainWindow(QMainWindow):
         self.export_pdf_button.clicked.connect(self._export_commercial_pdf)
         self.export_dxf_button.clicked.connect(self._export_current_sheet_dxf)
         self.export_svg_button.clicked.connect(self._export_current_sheet_svg)
-        self.nesting_button.clicked.connect(self._open_nesting)
         self.drop_area.pathsDropped.connect(self._add_paths)
         self.file_table.pathsDropped.connect(self._add_paths)
         self.file_table.quantityChanged.connect(self._on_job_quantity_changed)
@@ -679,7 +675,9 @@ class MainWindow(QMainWindow):
         globals()["analyze_shape"] = analyzer_module.analyze_shape
         import_worker_module.analyze_shape = analyzer_module.analyze_shape
         debug_dialog_module.analyze_shape = analyzer_module.analyze_shape
-        debug_dialog_module.classify_cut_edges = edge_classifier_module.classify_cut_edges
+        debug_dialog_module.classify_cut_edges = (
+            edge_classifier_module.classify_cut_edges_in_local_frame
+        )
         debug_dialog_module.count_edge_components = pierce_counter_module.count_edge_components
         if self.geometry_debug_dialog is not None:
             job = self._current_job()
@@ -890,7 +888,6 @@ class MainWindow(QMainWindow):
         self.remove_button.setEnabled(enabled)
         self.export_dxf_button.setEnabled(enabled)
         self.export_svg_button.setEnabled(enabled)
-        self.nesting_button.setEnabled(enabled)
         self.rebuild_iges_solid_button.setEnabled(enabled and self._current_job_is_iges())
         self.inventor_iges_button.setEnabled(enabled and self._current_job_is_iges())
 
@@ -1730,21 +1727,6 @@ class MainWindow(QMainWindow):
             return
         export_sheet_svg(sheet_analysis, target_path)
         self.statusBar().showMessage(f"SVG сохранен: {Path(target_path).name}", 5000)
-
-    def _open_nesting(self) -> None:
-        jobs: list[tuple[FileJob, object]] = []
-        for job in self.queue.jobs():
-            analysis = self.shape_analyses.get(job.normalized_path)
-            if getattr(analysis, "sheet_analysis", None) is not None:
-                jobs.append((job, analysis))
-        if not jobs:
-            QMessageBox.information(
-                self,
-                "Nesting",
-                "Сначала импортируйте DXF или листовые STEP/IGES детали.",
-            )
-            return
-        NestingDialog(self, jobs=jobs).exec()
 
     def _current_sheet_analysis(self) -> object | None:
         job = self._current_job()

@@ -6,11 +6,11 @@ from datetime import datetime
 from pathlib import Path
 
 
-CALC_CORE_REVISION = "round-iges-fallback-v2"
+CALC_CORE_REVISION = "tube-kernel-v6"
 
 
 def main() -> int:
-    version = sys.argv[1] if len(sys.argv) > 1 else "v0.5.5"
+    version = sys.argv[1] if len(sys.argv) > 1 else "v0.6.0"
     commit = os.environ.get("BUILD_COMMIT", "").strip() or "manual-build"
     build_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -34,7 +34,7 @@ def main() -> int:
                 f"Build date: {build_date}",
                 f"Build commit: {commit}",
                 f"Calc core: {CALC_CORE_REVISION}",
-                "Description: Verifies packaged build identity and improves round IGES diagnostics.",
+                "Description: Clean-room tube geometry kernel with oriented 3D contour mapping.",
                 "",
             )
         ),

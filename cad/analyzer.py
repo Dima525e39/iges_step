@@ -5,8 +5,9 @@ from pathlib import Path
 
 from cad.debug_faces import write_debug_faces_csv
 from cad.debug_edges import write_debug_edges_csv
-from cad.edge_classifier import classify_cut_edges
+from cad.edge_classifier import classify_cut_edges_in_local_frame as classify_cut_edges
 from cad.importer import CadImporter
+from cad.kernel_v6 import TubeKernelModel, build_tube_kernel_model
 from cad.pierce_counter import count_edge_components
 from cad.profile_detector import detect_profile_from_dimensions
 from cad.shape_summary import ShapeSummary, _count_topology, summarize_shape
@@ -49,6 +50,7 @@ class GeometryAnalysisResult:
     debug_faces_path: str = ""
     warnings: tuple[str, ...] = ()
     sheet_analysis: SheetAnalysisResult | None = None
+    tube_kernel: TubeKernelModel | None = None
     edge_classification: object | None = None
 
     def as_dict(self) -> dict[str, object]:
@@ -95,6 +97,13 @@ class GeometryAnalysisResult:
                 f"{self.sheet_analysis.contour_count}; "
                 f"размер {self.sheet_analysis.width_mm:.3f} x "
                 f"{self.sheet_analysis.height_mm:.3f} мм"
+            )
+        if self.tube_kernel is not None:
+            lines.append(
+                "Ядро геометрии: "
+                f"{self.tube_kernel.schema_version}; "
+                f"frame={self.tube_kernel.frame.method}; "
+                f"контуров={len(self.tube_kernel.cut_contours)}"
             )
         if self.debug_edges_path:
             lines.append(f"debug_edges.csv: {self.debug_edges_path}")
@@ -187,6 +196,8 @@ def analyze_shape(
     uncertain_edge_count = 0
     written_debug_edges_path = ""
     written_debug_faces_path = ""
+    classification = None
+    tube_kernel = None
     if min(sizes.values()) <= 0.0:
         warnings.append("Один из габаритов равен нулю; модель может быть поверхностной.")
     if solid_count == 0 and shell_count > 0:
@@ -302,6 +313,25 @@ def analyze_shape(
         wall_thickness_method = classification.wall_thickness_method
         wall_thickness_confidence = classification.wall_thickness_confidence
         round_outer_diameter_mm = classification.round_outer_diameter_mm
+        tube_frame = getattr(classification, "tube_frame", None)
+        if (
+            tube_frame is not None
+            and getattr(tube_frame, "method", "") == "oriented-edge-frame"
+        ):
+            length_mm = max(0.0, float(tube_frame.length_mm))
+            oriented_cross_sizes = sorted(
+                (
+                    max(0.0, float(tube_frame.width_mm)),
+                    max(0.0, float(tube_frame.height_mm)),
+                ),
+                reverse=True,
+            )
+            width_mm, height_mm = oriented_cross_sizes
+            profile = detect_profile_from_dimensions(length_mm, width_mm, height_mm)
+            profile_hint = profile.profile_type
+            warnings.append(
+                "Длина и сечение определены в локальной системе координат трубы."
+            )
         if round_outer_diameter_mm > 0.0:
             profile_hint = "Круглая труба"
             width_mm = round_outer_diameter_mm
@@ -378,6 +408,22 @@ def analyze_shape(
         cut_edge_count = step_text_analysis.pierce_count
         warnings.extend(step_text_analysis.warnings)
 
+    if classification is not None:
+        try:
+            tube_kernel = build_tube_kernel_model(
+                classification,
+                profile_type=profile_hint,
+                outer_width_mm=width_mm,
+                outer_height_mm=height_mm,
+                wall_thickness_mm=wall_thickness_mm,
+                wall_thickness_method=wall_thickness_method,
+                wall_thickness_confidence=wall_thickness_confidence,
+                reported_cut_length_mm=cut_length_mm,
+                reported_pierce_count=pierce_count,
+            )
+        except Exception as exc:
+            warnings.append(f"Ядро геометрии v6 не построено: {exc}")
+
     return GeometryAnalysisResult(
         file_format=file_format,
         profile_hint=profile_hint,
@@ -412,7 +458,8 @@ def analyze_shape(
         debug_faces_path=written_debug_faces_path,
         warnings=tuple(warnings),
         sheet_analysis=sheet_analysis,
-        edge_classification=classification if shape is not None else None,
+        tube_kernel=tube_kernel,
+        edge_classification=classification,
     )
 
 

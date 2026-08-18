@@ -1,5 +1,5 @@
-TubeCutCalculator v0.5.5
+TubeCutCalculator v0.6.0
 Build date: local
 Build commit: local
-Calc core: round-iges-fallback-v2
-Description: Verifies packaged build identity and improves diagnostics for round IGES tube analysis.
+Calc core: tube-kernel-v6
+Description: Clean-room tube geometry kernel with oriented 3D contour mapping.

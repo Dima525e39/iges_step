@@ -126,11 +126,16 @@ class Viewer2D(QWidget):
 
     def _render_preview(self, job: FileJob, preview: UnfoldingPreview) -> None:
         self.scene.clear()
+        frame_label = (
+            "локальная ось трубы"
+            if preview.frame_method == "oriented-edge-frame"
+            else "глобальная ось"
+        )
         self.header.setText(
             f"{job.name}: развертка расчета | "
             f"рез {preview.cut_length_mm:.1f} мм | "
             f"диагн. {preview.diagnostic_edge_length_mm:.1f} мм | "
-            f"врезок {preview.pierce_count}"
+            f"врезок {preview.pierce_count} | {frame_label}"
         )
 
         margin = 24.0

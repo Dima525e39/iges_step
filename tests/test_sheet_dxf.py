@@ -6,11 +6,10 @@ from pathlib import Path
 
 from cad.dxf_reader import read_dxf_sheet
 from cad.sheet_analyzer import SheetContour, SheetPoint, build_sheet_analysis_from_contours
-from export.vector_exporter import export_nesting_dxf, export_sheet_svg
-from nesting.core import MaxRectsNestingEngine, NestingPart, TrueShapeNestingEngine
+from export.vector_exporter import export_sheet_dxf, export_sheet_svg
 
 
-class SheetDxfAndNestingTests(unittest.TestCase):
+class SheetDxfTests(unittest.TestCase):
     def test_reads_dxf_sheet_contours_as_cut_length_and_pierces(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "part.dxf"
@@ -263,108 +262,7 @@ class SheetDxfAndNestingTests(unittest.TestCase):
         self.assertEqual(summary.size_y_mm, 5.0)
         self.assertEqual(analysis.pierce_count, 1)
 
-    def test_maxrects_nesting_uses_rotation_and_multiple_parts(self) -> None:
-        analysis = build_sheet_analysis_from_contours(
-            (
-                SheetContour(
-                    points=(
-                        SheetPoint(0.0, 0.0),
-                        SheetPoint(80.0, 0.0),
-                        SheetPoint(80.0, 40.0),
-                        SheetPoint(0.0, 40.0),
-                        SheetPoint(0.0, 0.0),
-                    ),
-                    length_mm=240.0,
-                    component_id=1,
-                ),
-            ),
-            width_mm=80.0,
-            height_mm=40.0,
-            thickness_mm=2.0,
-        )
-        part = NestingPart.from_sheet_analysis(name="plate", analysis=analysis, quantity=3)
-
-        layout = MaxRectsNestingEngine().nest(
-            (part,),
-            sheet_width_mm=100.0,
-            sheet_height_mm=100.0,
-            spacing_mm=2.0,
-            allow_rotation=True,
-        )
-
-        self.assertEqual(layout.sheet_count, 2)
-        self.assertEqual(len(layout.placements), 3)
-
-    def test_nesting_uses_arbitrary_rotation_step(self) -> None:
-        analysis = build_sheet_analysis_from_contours(
-            (
-                SheetContour(
-                    points=(
-                        SheetPoint(0.0, 0.0),
-                        SheetPoint(120.0, 0.0),
-                        SheetPoint(120.0, 20.0),
-                        SheetPoint(0.0, 20.0),
-                        SheetPoint(0.0, 0.0),
-                    ),
-                    length_mm=280.0,
-                    component_id=1,
-                ),
-            ),
-            width_mm=120.0,
-            height_mm=20.0,
-            thickness_mm=2.0,
-        )
-
-        layout = MaxRectsNestingEngine().nest(
-            (NestingPart.from_sheet_analysis(name="long", analysis=analysis),),
-            sheet_width_mm=100.0,
-            sheet_height_mm=100.0,
-            spacing_mm=0.0,
-            allow_rotation=True,
-            rotation_step_degrees=45.0,
-        )
-
-        self.assertEqual(layout.sheet_count, 1)
-        self.assertAlmostEqual(layout.placements[0].rotation_deg, 45.0)
-        self.assertLessEqual(layout.placements[0].width_mm, 100.0)
-        self.assertLessEqual(layout.placements[0].height_mm, 100.0)
-
-    def test_true_shape_nesting_interlocks_l_shaped_parts(self) -> None:
-        analysis = build_sheet_analysis_from_contours(
-            (
-                SheetContour(
-                    points=(
-                        SheetPoint(0.0, 0.0),
-                        SheetPoint(60.0, 0.0),
-                        SheetPoint(60.0, 20.0),
-                        SheetPoint(20.0, 20.0),
-                        SheetPoint(20.0, 60.0),
-                        SheetPoint(0.0, 60.0),
-                        SheetPoint(0.0, 0.0),
-                    ),
-                    length_mm=240.0,
-                    component_id=1,
-                ),
-            ),
-            width_mm=60.0,
-            height_mm=60.0,
-            thickness_mm=2.0,
-        )
-
-        layout = TrueShapeNestingEngine().nest(
-            (NestingPart.from_sheet_analysis(name="l-part", analysis=analysis, quantity=2),),
-            sheet_width_mm=80.2,
-            sheet_height_mm=80.2,
-            spacing_mm=0.1,
-            allow_rotation=True,
-            rotation_step_degrees=90.0,
-        )
-
-        self.assertEqual(layout.sheet_count, 1)
-        self.assertEqual(len(layout.placements), 2)
-        self.assertTrue(any(abs(item.rotation_deg - 180.0) <= 0.001 for item in layout.placements))
-
-    def test_exports_sheet_svg_and_nesting_dxf(self) -> None:
+    def test_exports_sheet_svg_and_dxf(self) -> None:
         analysis = build_sheet_analysis_from_contours(
             (
                 SheetContour(
@@ -383,15 +281,9 @@ class SheetDxfAndNestingTests(unittest.TestCase):
             height_mm=10.0,
             thickness_mm=1.0,
         )
-        layout = MaxRectsNestingEngine().nest(
-            (NestingPart.from_sheet_analysis(name="square", analysis=analysis),),
-            sheet_width_mm=50.0,
-            sheet_height_mm=50.0,
-        )
-
         with tempfile.TemporaryDirectory() as temp_dir:
             svg_path = export_sheet_svg(analysis, Path(temp_dir) / "part.svg")
-            dxf_path = export_nesting_dxf(layout, Path(temp_dir) / "nesting.dxf")
+            dxf_path = export_sheet_dxf(analysis, Path(temp_dir) / "part.dxf")
             self.assertIn("<polyline", svg_path.read_text(encoding="utf-8"))
             dxf_text = dxf_path.read_text(encoding="utf-8")
             self.assertIn("LINE", dxf_text)
